@@ -7,9 +7,12 @@ import { useAuthStore } from '~/stores/auth'
 
 const config = useRuntimeConfig()
 
-const { data } = await useFetch(
+const { data, error, pending } = await useFetch(
   `${config.public.apiUrl}/api/test`
 )
+
+console.log(data.value)
+console.log(error.value)
 
 const auth = useAuthStore()
 const form = ref({
@@ -35,11 +38,18 @@ async function handleLogin() {
 </script>
 
 <template>
+  <div>
+    <p v-if="pending">Loading...</p>
 
-    <div>
-    {{ data }}
+    <pre v-else-if="data">
+      {{ data }}
+    </pre>
+
+    <pre v-else-if="error">
+      {{ error }}
+    </pre>
   </div>
-  
+
   <div class="min-h-screen flex items-center justify-center bg-zinc-50 px-4">
     <Card class="w-full max-w-md p-6 shadow-lg border-zinc-200">
       <div class="space-y-2 text-center mb-8">
