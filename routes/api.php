@@ -49,9 +49,9 @@ Route::get('/organizations', function () {
         return response()->json(['data' => \App\Models\Organization::all()]);
         });
 });
+
 Route::get('/test', function () {
-    return response()->json([
-        'message' => 'Backend connect sukses 🔥'
-    ]);
+    return 'ok';
 });
+
 });
