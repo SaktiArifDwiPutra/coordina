@@ -35,6 +35,11 @@ async function handleLogin() {
 </script>
 
 <template>
+
+    <div>
+    {{ data }}
+  </div>
+  
   <div class="min-h-screen flex items-center justify-center bg-zinc-50 px-4">
     <Card class="w-full max-w-md p-6 shadow-lg border-zinc-200">
       <div class="space-y-2 text-center mb-8">
