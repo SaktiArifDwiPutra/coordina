@@ -7,6 +7,12 @@ export default defineNuxtConfig({
 
   modules: ['shadcn-nuxt', '@pinia/nuxt', '@nuxtjs/tailwindcss'],
 
+  runtimeConfig: {
+    public: {
+      apiUrl: process.env.NUXT_PUBLIC_API_URL
+    }
+  },
+
   shadcn: {
     prefix: '',
     componentDir: './app/components/ui'

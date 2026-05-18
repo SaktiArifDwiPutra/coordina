@@ -5,6 +5,12 @@ import { Label } from '~/components/ui/label'
 import { Button } from '~/components/ui/button'
 import { useAuthStore } from '~/stores/auth'
 
+const config = useRuntimeConfig()
+
+const { data } = await useFetch(
+  `${config.public.apiUrl}/api/test`
+)
+
 const auth = useAuthStore()
 const form = ref({
   email: '',

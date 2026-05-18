@@ -6,6 +6,14 @@ import { Label } from '~/components/ui/label'
 import { Input } from '~/components/ui/input'
 import { Button } from '~/components/ui/button'
 
+const config = useRuntimeConfig()
+
+const { data } = await useFetch(
+  `${config.public.apiUrl}/api/test`
+)
+
+console.log(data.value)
+
 const auth = useAuthStore()
 const pageLoading = ref(true)
 let autoSyncInterval = null
