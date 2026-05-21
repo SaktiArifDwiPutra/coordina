@@ -1,0 +1,16 @@
+[phases.setup]
+nixPkgs = ["php83", "nodejs_22"]
+
+[phases.install]
+cmds = [
+  "composer install --no-interaction --prefer-dist",
+  "npm install"
+]
+
+[phases.build]
+cmds = [
+  "npm run build"
+]
+
+[start]
+cmd = "php artisan migrate --force && php artisan octane:frankenphp --host=0.0.0.0 --port=$PORT"
