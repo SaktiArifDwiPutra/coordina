@@ -30,10 +30,13 @@ async function handleLogin() {
     // Jika berhasil, arahkan ke dashboard
     navigateTo('/dashboard')
   } catch (err) {
-    errorMsg.value = err.data?.message || 'Login gagal, cek kembali koneksi.'
-  } finally {
-    loading.value = false
-  }
+  console.log(err)
+
+  errorMsg.value =
+    err?.data?.message ||
+    err?.message ||
+    'Login gagal'
+}
 }
 </script>
 
