@@ -1,109 +1,87 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from '~/stores/auth'
 
 const config = useRuntimeConfig()
 const auth = useAuthStore()
 
-/* =========================
-   AUTH STATE (ONLY GUARD)
-========================= */
+/* =====================
+   AUTH
+===================== */
 const authReady = ref(false)
 
-/* =========================
-   DATA STATE
-========================= */
+/* =====================
+   DATA
+===================== */
 const facilities = ref([])
-const organizations = ref([])
 const borrowRequests = ref([])
 const eskulUsers = ref([])
 
-const loadingFacilities = ref(false)
-const loadingRequests = ref(false)
-const loadingUsers = ref(false)
+/* =====================
+   LOADING
+===================== */
+const loading = ref(false)
 
-/* =========================
-   FORM STATE (UNCHANGED)
-========================= */
-const form = ref({
-  facility_id: '',
-  date: '',
-  start_time: '',
-  end_time: '',
-  reason: ''
-})
+/* =====================
+   FETCH GUARD (ANTI SPAM)
+===================== */
+let isFetching = false
 
-/* =========================
-   FETCH API (NON-BLOCKING)
-========================= */
+/* =====================
+   API CALLS
+===================== */
 async function fetchFacilities() {
-  loadingFacilities.value = true
-  try {
-    const res = await $fetch(`${config.public.apiUrl}/api/facilities`, {
-      headers: { Authorization: `Bearer ${auth.token}` }
-    })
-    facilities.value = res.data
-  } finally {
-    loadingFacilities.value = false
-  }
+  return $fetch(`${config.public.apiUrl}/api/facilities`, {
+    headers: { Authorization: `Bearer ${auth.token}` }
+  }).then(res => facilities.value = res.data)
 }
 
 async function fetchBorrowRequests() {
-  loadingRequests.value = true
-  try {
-    const res = await $fetch(`${config.public.apiUrl}/api/borrow-requests`, {
-      headers: { Authorization: `Bearer ${auth.token}` }
-    })
-    borrowRequests.value = res.data
-  } finally {
-    loadingRequests.value = false
-  }
+  return $fetch(`${config.public.apiUrl}/api/borrow-requests`, {
+    headers: { Authorization: `Bearer ${auth.token}` }
+  }).then(res => borrowRequests.value = res.data)
 }
 
 async function fetchEskulUsers() {
   if (!['admin', 'admin_mpk'].includes(auth.user?.role)) return
 
-  loadingUsers.value = true
-  try {
-    const res = await $fetch(`${config.public.apiUrl}/api/users`, {
-      headers: { Authorization: `Bearer ${auth.token}` }
-    })
-    eskulUsers.value = res.data
-  } finally {
-    loadingUsers.value = false
-  }
+  return $fetch(`${config.public.apiUrl}/api/users`, {
+    headers: { Authorization: `Bearer ${auth.token}` }
+  }).then(res => eskulUsers.value = res.data)
 }
 
-/* =========================
-   FAST LOAD (PARALLEL)
-========================= */
-async function loadData() {
-  // jangan blocking UI
-  fetchFacilities()
-  fetchBorrowRequests()
-  fetchEskulUsers()
+/* =====================
+   LOAD DATA (NON BLOCKING)
+===================== */
+function loadData() {
+  if (isFetching) return
+  isFetching = true
+
+  Promise.allSettled([
+    fetchFacilities(),
+    fetchBorrowRequests(),
+    fetchEskulUsers()
+  ]).finally(() => {
+    isFetching = false
+  })
 }
 
-/* =========================
-   REFRESH LIGHT MODE
-========================= */
-function startAutoSync() {
-  return setInterval(() => {
-    // hanya data dinamis saja
-    fetchBorrowRequests()
-  }, 10000)
-}
-
+/* =====================
+   AUTO SYNC (LIGHT ONLY)
+===================== */
 let interval = null
 
-/* =========================
+function startAutoSync() {
+  interval = setInterval(() => {
+    fetchBorrowRequests() // ONLY 1 API, NOT ALL
+  }, 20000)
+}
+
+/* =====================
    INIT
-========================= */
+===================== */
 onMounted(async () => {
-  // 1. AUTH ONLY (blocking minimal)
-  if (!auth.user) {
-    await auth.fetchUser()
-  }
+  if (!auth.user) await auth.fetchUser()
 
   if (!auth.token || !auth.user) {
     return navigateTo('/login')
@@ -111,23 +89,13 @@ onMounted(async () => {
 
   authReady.value = true
 
-  // 2. LOAD DATA AFTER UI READY (NON BLOCKING)
   loadData()
-
-  // 3. AUTO SYNC ringan
-  interval = startAutoSync()
+  startAutoSync()
 })
 
 onUnmounted(() => {
   if (interval) clearInterval(interval)
 })
-
-/* =========================
-   HELPER (unchanged logic)
-========================= */
-function showAlert(title, message, type = 'info') {
-  alertModal.value = { isOpen: true, title, message, type }
-}
 </script>
 
 <template>
