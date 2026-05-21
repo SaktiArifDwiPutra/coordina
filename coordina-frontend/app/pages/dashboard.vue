@@ -357,9 +357,19 @@ onMounted(async () => {
   await refreshAllData(false)
   pageLoading.value = false
 
-  autoSyncInterval = setInterval(() => {
-    refreshAllData(true)
-  }, 10000)
+let isRefreshing = false // Tambahkan "satpam" penjaga antrean
+
+  autoSyncInterval = setInterval(async () => {
+    // Kalau masih ada request yang jalan (belum beres), batalkan request baru
+    if (isRefreshing) return 
+    
+    isRefreshing = true
+    try {
+      await refreshAllData(true)
+    } finally {
+      isRefreshing = false
+    }
+  }, 30000) // Ubah dari 10 detik menjadi 30 detik agar server bisa napas
 })
 
 onUnmounted(() => {
