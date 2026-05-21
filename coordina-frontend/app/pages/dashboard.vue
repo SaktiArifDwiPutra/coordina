@@ -1,100 +1,365 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from '~/stores/auth'
+import { Card, CardHeader, CardTitle, CardContent } from '~/components/ui/card'
+import { Label } from '~/components/ui/label'
+import { Input } from '~/components/ui/input'
+import { Button } from '~/components/ui/button'
 
 const config = useRuntimeConfig()
+
+const { data } = await useFetch(
+  `${config.public.apiUrl}/api/test`
+)
+
+console.log(data.value)
+
 const auth = useAuthStore()
+const pageLoading = ref(true)
+let autoSyncInterval = null
 
-/* =====================
-   AUTH
-===================== */
-const authReady = ref(false)
-
-/* =====================
-   DATA
-===================== */
+// --- STATE DATA MASTER ---
 const facilities = ref([])
+const organizations = ref([])
 const borrowRequests = ref([])
 const eskulUsers = ref([])
 
-/* =====================
-   LOADING
-===================== */
-const loading = ref(false)
+const loading = ref(true)
+const loadingRequests = ref(true)
+const loadingUsers = ref(false)
 
-/* =====================
-   FETCH GUARD (ANTI SPAM)
-===================== */
-let isFetching = false
+// --- STATE FORM PENGAJUAN (ESKUL) ---
+const form = ref({
+  facility_id: '',
+  date: '',
+  start_time: '',
+  end_time: '',
+  reason: ''
+})
+const isSubmitting = ref(false)
 
-/* =====================
-   API CALLS
-===================== */
-async function fetchFacilities() {
-  return $fetch(`${config.public.apiUrl}/api/facilities`, {
-    headers: { Authorization: `Bearer ${auth.token}` }
-  }).then(res => facilities.value = res.data)
+// --- STATE FORM PEMBUATAN AKUN (MPK) ---
+const newUserForm = ref({
+  name: '',
+  email: '',
+  password: '',
+  organization_id: ''
+})
+const isCreatingUser = ref(false)
+
+// --- STATE FORM DATA MASTER (MPK) ---
+const facilityForm = ref({ name: '', type: '', description: '' })
+const isCreatingFacility = ref(false)
+
+const scheduleForm = ref({ facility_id: '', organization_id: '', day: 'Monday', start_time: '', end_time: '' })
+const isCreatingSchedule = ref(false)
+
+// --- STATE MODAL ---
+const alertModal = ref({ isOpen: false, title: '', message: '', type: 'info' })
+const passwordModal = ref({ isOpen: false, userId: null, userName: '', newPassword: '', isSubmitting: false })
+const deleteModal = ref({ isOpen: false, userId: null, userName: '', isSubmitting: false })
+const approvalModal = ref({ isOpen: false, requestId: null, actionType: '', orgName: '', facilityName: '', isSubmitting: false })
+
+function showAlert(title, message, type = 'info') {
+  alertModal.value = { isOpen: true, title, message, type }
 }
 
-async function fetchBorrowRequests() {
-  return $fetch(`${config.public.apiUrl}/api/borrow-requests`, {
-    headers: { Authorization: `Bearer ${auth.token}` }
-  }).then(res => borrowRequests.value = res.data)
+function openPasswordReset(id, name) {
+  passwordModal.value = { isOpen: true, userId: id, userName: name, newPassword: '', isSubmitting: false }
 }
 
-async function fetchEskulUsers() {
-  if (!['admin', 'admin_mpk'].includes(auth.user?.role)) return
-
-  return $fetch(`${config.public.apiUrl}/api/users`, {
-    headers: { Authorization: `Bearer ${auth.token}` }
-  }).then(res => eskulUsers.value = res.data)
+function confirmDeleteUser(id, name) {
+  deleteModal.value = { isOpen: true, userId: id, userName: name, isSubmitting: false }
 }
 
-/* =====================
-   LOAD DATA (NON BLOCKING)
-===================== */
-function loadData() {
-  if (isFetching) return
-  isFetching = true
-
-  Promise.allSettled([
-    fetchFacilities(),
-    fetchBorrowRequests(),
-    fetchEskulUsers()
-  ]).finally(() => {
-    isFetching = false
-  })
+function confirmApproval(id, actionType, orgName, facilityName) {
+  approvalModal.value = { isOpen: true, requestId: id, actionType, orgName, facilityName, isSubmitting: false }
 }
 
-/* =====================
-   AUTO SYNC (LIGHT ONLY)
-===================== */
-let interval = null
+// --- STATE TAB JADWAL ---
+const activeDay = ref('Monday')
+const days = [
+  { key: 'Monday', label: 'Senin' },
+  { key: 'Tuesday', label: 'Selasa' },
+  { key: 'Wednesday', label: 'Rabu' },
+  { key: 'Thursday', label: 'Kamis' },
+  { key: 'Friday', label: 'Jumat' }
+]
 
-function startAutoSync() {
-  interval = setInterval(() => {
-    fetchBorrowRequests() // ONLY 1 API, NOT ALL
-  }, 20000)
+// --- FUNGSI HELPER JADWAL ---
+function getDayName(dateString) {
+  const [year, month, day] = dateString.split('-');
+  return new Date(year, month - 1, day).toLocaleDateString('en-US', { weekday: 'long' });
 }
 
-/* =====================
-   INIT
-===================== */
-onMounted(async () => {
-  if (!auth.user) await auth.fetchUser()
+function getOverridesForSchedule(facility, day, startTime, endTime) {
+  if (!facility.borrow_requests) return [];
+  return facility.borrow_requests.filter(req => {
+    return getDayName(req.date) === day && 
+           (req.start_time < endTime && req.end_time > startTime);
+  });
+}
 
-  if (!auth.token || !auth.user) {
-    return navigateTo('/login')
+function getPureBorrowRequests(facility, day) {
+  if (!facility.borrow_requests) return [];
+  return facility.borrow_requests.filter(req => {
+    return getDayName(req.date) === day && !req.owner_organization_id;
+  });
+}
+
+function hasAnySchedule(facility, day) {
+  const fixed = facility.fixed_schedules?.filter(s => s.day === day) || [];
+  const overrides = facility.borrow_requests?.filter(req => getDayName(req.date) === day) || [];
+  return fixed.length > 0 || overrides.length > 0;
+}
+
+// --- FUNGSI AMBIL DATA API ---
+async function fetchFacilities(silent = false) {
+  if (!silent) loading.value = true
+  try {
+    const response = await $fetch('http://127.0.0.1:8000/api/facilities', {
+      headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` }
+    })
+    facilities.value = response.data
+  } catch (error) {
+    console.error(error)
+  } finally {
+    if (!silent) loading.value = false
   }
+}
 
-  authReady.value = true
+async function fetchBorrowRequests(silent = false) {
+  if (!silent) loadingRequests.value = true
+  try {
+    const response = await $fetch('http://127.0.0.1:8000/api/borrow-requests', {
+      headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` }
+    })
+    borrowRequests.value = response.data
+  } catch (error) {
+    console.error(error)
+  } finally {
+    if (!silent) loadingRequests.value = false
+  }
+}
 
-  loadData()
-  startAutoSync()
+async function fetchEskulUsers(silent = false) {
+  if (!silent) loadingUsers.value = true
+  try {
+    const response = await $fetch('http://127.0.0.1:8000/api/users', {
+      headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` }
+    })
+    eskulUsers.value = response.data
+  } catch (error) {
+    console.error(error)
+  } finally {
+    if (!silent) loadingUsers.value = false
+  }
+}
+
+async function fetchOrganizations() {
+  try {
+    const response = await $fetch('http://127.0.0.1:8000/api/organizations', {
+      headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` }
+    })
+    organizations.value = response.data
+  } catch (error) {
+    console.error(error)
+  }
+}
+
+// --- TURBO REFRESH (Jalan Serentak) ---
+async function refreshAllData(silent = true) {
+  const tasks = [
+    fetchFacilities(silent),
+    fetchBorrowRequests(silent)
+  ]
+  if (['admin', 'admin_mpk'].includes(auth.user?.role)) {
+    tasks.push(fetchEskulUsers(silent))
+  }
+  await Promise.all(tasks)
+}
+
+// --- FUNGSI AKSI MANAJEMEN DATA MASTER (MPK) ---
+async function createFacility() {
+  isCreatingFacility.value = true
+  try {
+    const response = await $fetch('http://127.0.0.1:8000/api/facilities', {
+      method: 'POST',
+      headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` },
+      body: facilityForm.value
+    })
+    showAlert('Berhasil!', response.message, 'success')
+    facilityForm.value = { name: '', type: '', description: '' }
+    refreshAllData()
+  } catch (error) {
+    showAlert('Gagal!', 'Gagal menambahkan fasilitas.', 'error')
+  } finally {
+    isCreatingFacility.value = false
+  }
+}
+
+async function deleteFacility(id) {
+  if (!confirm('Apakah Anda yakin ingin menghapus fasilitas ini beserta seluruh jadwal di dalamnya?')) return
+  try {
+    const response = await $fetch(`http://127.0.0.1:8000/api/facilities/${id}`, {
+      method: 'DELETE',
+      headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` }
+    })
+    showAlert('Berhasil!', response.message, 'success')
+    refreshAllData()
+  } catch (error) {
+    showAlert('Gagal!', 'Gagal menghapus fasilitas.', 'error')
+  }
+}
+
+async function createFixedSchedule() {
+  isCreatingSchedule.value = true
+  try {
+    const response = await $fetch('http://127.0.0.1:8000/api/fixed-schedules', {
+      method: 'POST',
+      headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` },
+      body: scheduleForm.value
+    })
+    showAlert('Berhasil!', response.message, 'success')
+    scheduleForm.value = { facility_id: '', organization_id: '', day: 'Monday', start_time: '', end_time: '' }
+    refreshAllData()
+  } catch (error) {
+    showAlert('Gagal!', 'Gagal mendaftarkan jadwal tetap.', 'error')
+  } finally {
+    isCreatingSchedule.value = false
+  }
+}
+
+async function deleteFixedSchedule(id) {
+  if (!confirm('Hapus hak milik jadwal tetap ini?')) return
+  try {
+    const response = await $fetch(`http://127.0.0.1:8000/api/fixed-schedules/${id}`, {
+      method: 'DELETE',
+      headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` }
+    })
+    showAlert('Berhasil!', response.message, 'success')
+    refreshAllData()
+  } catch (error) {
+    showAlert('Gagal!', 'Gagal menghapus jadwal.', 'error')
+  }
+}
+
+// --- FUNGSI OPERASIONAL LAINNYA ---
+async function createEskulUser() {
+  isCreatingUser.value = true
+  try {
+    const response = await $fetch('http://127.0.0.1:8000/api/users', {
+      method: 'POST',
+      headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` },
+      body: newUserForm.value
+    })
+    showAlert('Berhasil!', response.message, 'success')
+    newUserForm.value = { name: '', email: '', password: '', organization_id: '' }
+    refreshAllData()
+  } catch (error) {
+    showAlert('Gagal!', error.response?._data?.message || 'Gagal membuat akun.', 'error')
+  } finally {
+    isCreatingUser.value = false
+  }
+}
+
+async function submitPasswordReset() {
+  passwordModal.value.isSubmitting = true
+  try {
+    const response = await $fetch(`http://127.0.0.1:8000/api/users/${passwordModal.value.userId}/reset-password`, {
+      method: 'PATCH',
+      headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` },
+      body: { password: passwordModal.value.newPassword }
+    })
+    passwordModal.value.isOpen = false
+    showAlert('Berhasil!', response.message, 'success')
+  } catch (error) {
+    showAlert('Gagal!', 'Terjadi kesalahan.', 'error')
+  } finally {
+    passwordModal.value.isSubmitting = false
+  }
+}
+
+async function executeDeleteUser() {
+  deleteModal.value.isSubmitting = true
+  try {
+    const response = await $fetch(`http://127.0.0.1:8000/api/users/${deleteModal.value.userId}`, {
+      method: 'DELETE',
+      headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` }
+    })
+    deleteModal.value.isOpen = false
+    showAlert('Berhasil!', response.message, 'success')
+    refreshAllData()
+  } catch (error) {
+    showAlert('Gagal!', 'Gagal menghapus.', 'error')
+  } finally {
+    deleteModal.value.isSubmitting = false
+  }
+}
+
+async function updateRequestStatus(id, newStatus, fromModal = false) {
+  if (fromModal) approvalModal.value.isSubmitting = true
+  try {
+    await $fetch(`http://127.0.0.1:8000/api/borrow-requests/${id}/status`, {
+      method: 'PATCH',
+      headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` },
+      body: { status: newStatus }
+    })
+    if (fromModal) {
+      approvalModal.value.isOpen = false
+      showAlert('Berhasil!', `Status permohonan berhasil diubah menjadi ${newStatus}.`, 'success')
+    }
+    await refreshAllData(true)
+  } catch (error) {
+    showAlert('Gagal!', 'Terjadi kesalahan', 'error')
+  } finally {
+    if (fromModal) approvalModal.value.isSubmitting = false
+  }
+}
+
+async function submitRequest() {
+  isSubmitting.value = true
+  try {
+    const response = await $fetch('http://127.0.0.1:8000/api/borrow-requests', {
+      method: 'POST',
+      headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` },
+      body: form.value
+    })
+    showAlert('Berhasil!', response.message, 'success')
+    form.value = { facility_id: '', date: '', start_time: '', end_time: '', reason: '' }
+    refreshAllData()
+  } catch (error) {
+    showAlert('Gagal!', error.response?._data?.message || 'Terjadi kesalahan.', 'error')
+  } finally {
+    isSubmitting.value = false
+  }
+}
+
+function handleLogout() {
+  auth.logout()
+}
+
+onMounted(async () => {
+  pageLoading.value = true
+  if (!auth.user) await auth.fetchUser() 
+  if (!auth.token || !auth.user) return navigateTo('/login')
+  
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long' })
+  if (days.map(d => d.key).includes(today)) activeDay.value = today
+  
+  if (['admin', 'admin_mpk'].includes(auth.user.role)) {
+    fetchOrganizations()
+  }
+  await refreshAllData(false)
+  pageLoading.value = false
+
+  autoSyncInterval = setInterval(() => {
+    refreshAllData(true)
+  }, 10000)
 })
 
 onUnmounted(() => {
-  if (interval) clearInterval(interval)
+  if (autoSyncInterval) clearInterval(autoSyncInterval)
 })
 </script>
 
@@ -107,12 +372,13 @@ onUnmounted(() => {
   <div v-else class="min-h-screen bg-zinc-50 p-8 relative">
     
     <!-- === MODALS === -->
-<div v-if="!authReady" class="min-h-screen flex items-center justify-center bg-zinc-50">
-  <div class="text-center">
-    <div class="animate-spin h-10 w-10 border-b-2 border-zinc-900 mx-auto mb-3"></div>
-    <p class="text-zinc-500">Verifying session...</p>
-  </div>
-</div>
+    <div v-if="alertModal.isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div class="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4 animate-in fade-in zoom-in-95 duration-200">
+        <h3 :class="['text-lg font-bold', alertModal.type === 'error' ? 'text-red-600' : 'text-zinc-900']">{{ alertModal.title }}</h3>
+        <p class="text-zinc-600 text-sm leading-relaxed">{{ alertModal.message }}</p>
+        <div class="flex justify-end pt-2"><Button @click="alertModal.isOpen = false" :class="alertModal.type === 'error' ? 'bg-red-600 hover:bg-red-700' : 'bg-zinc-900'">Mengerti</Button></div>
+      </div>
+    </div>
 
     <div v-if="passwordModal.isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
       <div class="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4 animate-in fade-in zoom-in-95 duration-200">
