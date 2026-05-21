@@ -7,7 +7,18 @@ use App\Http\Controllers\FacilityController;
 use App\Http\Controllers\BorrowRequestController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\FixedScheduleController;
+use Illuminate\Support\Facades\Artisan;
 
+Route::get('/migrate-db', function () {
+    Artisan::call('migrate --force');
+
+    return Artisan::output();
+});
+Route::get('/seed-db', function () {
+    Artisan::call('db:seed --force');
+
+    return Artisan::output();
+});
 // =======================
 // PUBLIC ROUTES
 // =======================
