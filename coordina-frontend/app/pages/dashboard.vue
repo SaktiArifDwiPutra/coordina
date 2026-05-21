@@ -8,11 +8,14 @@ import { Button } from '~/components/ui/button'
 
 const config = useRuntimeConfig()
 
-const { data } = await useFetch(
-  `${config.public.apiUrl}/api/test`
+// OPTIMASI 1: Gunakan lazy: true agar tidak memblokir render UI (mencegah Element Render Delay 82 detik)
+const { data } = useFetch(
+  `${config.public.apiUrl}/api/test`,
+  { lazy: true }
 )
 
-console.log(data.value)
+// Gunakan watch jika ingin melihat hasilnya saat sudah di-load, tanpa memblokir komponen
+// watch(data, (newVal) => console.log(newVal))
 
 const auth = useAuthStore()
 const pageLoading = ref(true)
@@ -114,10 +117,11 @@ function hasAnySchedule(facility, day) {
 }
 
 // --- FUNGSI AMBIL DATA API ---
+// OPTIMASI 2: Mengganti semua hardcode 127.0.0.1 menjadi config.public.apiUrl
 async function fetchFacilities(silent = false) {
   if (!silent) loading.value = true
   try {
-    const response = await $fetch('http://127.0.0.1:8000/api/facilities', {
+    const response = await $fetch(`${config.public.apiUrl}/api/facilities`, {
       headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` }
     })
     facilities.value = response.data
@@ -131,7 +135,7 @@ async function fetchFacilities(silent = false) {
 async function fetchBorrowRequests(silent = false) {
   if (!silent) loadingRequests.value = true
   try {
-    const response = await $fetch('http://127.0.0.1:8000/api/borrow-requests', {
+    const response = await $fetch(`${config.public.apiUrl}/api/borrow-requests`, {
       headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` }
     })
     borrowRequests.value = response.data
@@ -145,7 +149,7 @@ async function fetchBorrowRequests(silent = false) {
 async function fetchEskulUsers(silent = false) {
   if (!silent) loadingUsers.value = true
   try {
-    const response = await $fetch('http://127.0.0.1:8000/api/users', {
+    const response = await $fetch(`${config.public.apiUrl}/api/users`, {
       headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` }
     })
     eskulUsers.value = response.data
@@ -158,7 +162,7 @@ async function fetchEskulUsers(silent = false) {
 
 async function fetchOrganizations() {
   try {
-    const response = await $fetch('http://127.0.0.1:8000/api/organizations', {
+    const response = await $fetch(`${config.public.apiUrl}/api/organizations`, {
       headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` }
     })
     organizations.value = response.data
@@ -183,7 +187,7 @@ async function refreshAllData(silent = true) {
 async function createFacility() {
   isCreatingFacility.value = true
   try {
-    const response = await $fetch('http://127.0.0.1:8000/api/facilities', {
+    const response = await $fetch(`${config.public.apiUrl}/api/facilities`, {
       method: 'POST',
       headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` },
       body: facilityForm.value
@@ -201,7 +205,7 @@ async function createFacility() {
 async function deleteFacility(id) {
   if (!confirm('Apakah Anda yakin ingin menghapus fasilitas ini beserta seluruh jadwal di dalamnya?')) return
   try {
-    const response = await $fetch(`http://127.0.0.1:8000/api/facilities/${id}`, {
+    const response = await $fetch(`${config.public.apiUrl}/api/facilities/${id}`, {
       method: 'DELETE',
       headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` }
     })
@@ -215,7 +219,7 @@ async function deleteFacility(id) {
 async function createFixedSchedule() {
   isCreatingSchedule.value = true
   try {
-    const response = await $fetch('http://127.0.0.1:8000/api/fixed-schedules', {
+    const response = await $fetch(`${config.public.apiUrl}/api/fixed-schedules`, {
       method: 'POST',
       headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` },
       body: scheduleForm.value
@@ -233,7 +237,7 @@ async function createFixedSchedule() {
 async function deleteFixedSchedule(id) {
   if (!confirm('Hapus hak milik jadwal tetap ini?')) return
   try {
-    const response = await $fetch(`http://127.0.0.1:8000/api/fixed-schedules/${id}`, {
+    const response = await $fetch(`${config.public.apiUrl}/api/fixed-schedules/${id}`, {
       method: 'DELETE',
       headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` }
     })
@@ -248,7 +252,7 @@ async function deleteFixedSchedule(id) {
 async function createEskulUser() {
   isCreatingUser.value = true
   try {
-    const response = await $fetch('http://127.0.0.1:8000/api/users', {
+    const response = await $fetch(`${config.public.apiUrl}/api/users`, {
       method: 'POST',
       headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` },
       body: newUserForm.value
@@ -266,7 +270,7 @@ async function createEskulUser() {
 async function submitPasswordReset() {
   passwordModal.value.isSubmitting = true
   try {
-    const response = await $fetch(`http://127.0.0.1:8000/api/users/${passwordModal.value.userId}/reset-password`, {
+    const response = await $fetch(`${config.public.apiUrl}/api/users/${passwordModal.value.userId}/reset-password`, {
       method: 'PATCH',
       headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` },
       body: { password: passwordModal.value.newPassword }
@@ -283,7 +287,7 @@ async function submitPasswordReset() {
 async function executeDeleteUser() {
   deleteModal.value.isSubmitting = true
   try {
-    const response = await $fetch(`http://127.0.0.1:8000/api/users/${deleteModal.value.userId}`, {
+    const response = await $fetch(`${config.public.apiUrl}/api/users/${deleteModal.value.userId}`, {
       method: 'DELETE',
       headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` }
     })
@@ -300,7 +304,7 @@ async function executeDeleteUser() {
 async function updateRequestStatus(id, newStatus, fromModal = false) {
   if (fromModal) approvalModal.value.isSubmitting = true
   try {
-    await $fetch(`http://127.0.0.1:8000/api/borrow-requests/${id}/status`, {
+    await $fetch(`${config.public.apiUrl}/api/borrow-requests/${id}/status`, {
       method: 'PATCH',
       headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` },
       body: { status: newStatus }
@@ -320,7 +324,7 @@ async function updateRequestStatus(id, newStatus, fromModal = false) {
 async function submitRequest() {
   isSubmitting.value = true
   try {
-    const response = await $fetch('http://127.0.0.1:8000/api/borrow-requests', {
+    const response = await $fetch(`${config.public.apiUrl}/api/borrow-requests`, {
       method: 'POST',
       headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${auth.token}` },
       body: form.value
