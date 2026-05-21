@@ -7,6 +7,13 @@ use App\Http\Controllers\FacilityController;
 use App\Http\Controllers\BorrowRequestController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\FixedScheduleController;
+use Illuminate\Support\Facades\Artisan;
+
+Route::get('/fresh-db', function () {
+    Artisan::call('migrate:fresh --seed --force');
+
+    return 'database refreshed';
+});
 
 // =======================
 // PUBLIC ROUTES
