@@ -5,53 +5,63 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\FacilityController;
 use App\Http\Controllers\BorrowRequestController;
+use App\Http\Controllers\UserController;
+use App\Http\Controllers\FixedScheduleController;
 
+// =======================
+// PUBLIC ROUTES
+// =======================
 
-Route::get('/user', function (Request $request) {
-    return $request->user();
-})->middleware('auth:sanctum');
-
-// Route tanpa login
 Route::post('/login', [AuthController::class, 'login']);
 
-// Route wajib login (dibungkus middleware sanctum)
-Route::middleware('auth:sanctum')->group(function () {
-    Route::post('/logout', [AuthController::class, 'logout']);
-    
-// API
-Route::get('/user', function (Request $request) {return $request->user();});
+Route::get('/test', function () {
+    return response()->json([
+        'message' => 'API OK'
+    ]);
+});
 
-// fixed schedule
-Route::get('/facilities', [FacilityController::class, 'index']);
+Route::get('/dns-test', function () {
+    return gethostbyname('ep-rapid-bar-aq1ugwbd.c-8.us-east-1.aws.neon.tech');
+});
 
-// borrow system
+// =======================
+// PROTECTED ROUTES
+// =======================
+
 Route::middleware('auth:sanctum')->group(function () {
+
+    // auth
     Route::post('/logout', [AuthController::class, 'logout']);
-    Route::get('/user', function (Request $request) { return $request->user(); });
+
+    Route::get('/user', function (Request $request) {
+        return $request->user();
+    });
+
+    // facilities
     Route::get('/facilities', [FacilityController::class, 'index']);
-    
-// Tambahkan ini untuk menerima form pengajuan
-Route::post('/borrow-requests', [BorrowRequestController::class, 'store']);
+    Route::post('/facilities', [FacilityController::class, 'store']);
+    Route::delete('/facilities/{id}', [FacilityController::class, 'destroy']);
+
+    // borrow requests
+    Route::post('/borrow-requests', [BorrowRequestController::class, 'store']);
     Route::get('/borrow-requests', [BorrowRequestController::class, 'index']);
     Route::patch('/borrow-requests/{id}/status', [BorrowRequestController::class, 'updateStatus']);
 
-// Manajemen Akun (Oleh MPK)
-Route::get('/users', [App\Http\Controllers\UserController::class, 'index']);
-    Route::post('/users', [App\Http\Controllers\UserController::class, 'store']);
-    Route::patch('/users/{id}/reset-password', [App\Http\Controllers\UserController::class, 'resetPassword']);
-    Route::delete('/users/{id}', [App\Http\Controllers\UserController::class, 'destroy']);
-    Route::post('/facilities', [App\Http\Controllers\FacilityController::class, 'store']);
-    Route::delete('/facilities/{id}', [App\Http\Controllers\FacilityController::class, 'destroy']);
-    Route::post('/fixed-schedules', [App\Http\Controllers\FixedScheduleController::class, 'store']);
-    Route::delete('/fixed-schedules/{id}', [App\Http\Controllers\FixedScheduleController::class, 'destroy']);
+    // users
+    Route::get('/users', [UserController::class, 'index']);
+    Route::post('/users', [UserController::class, 'store']);
+    Route::patch('/users/{id}/reset-password', [UserController::class, 'resetPassword']);
+    Route::delete('/users/{id}', [UserController::class, 'destroy']);
 
-Route::get('/organizations', function () {
-        return response()->json(['data' => \App\Models\Organization::all()]);
-        });
-});
+    // fixed schedules
+    Route::post('/fixed-schedules', [FixedScheduleController::class, 'store']);
+    Route::delete('/fixed-schedules/{id}', [FixedScheduleController::class, 'destroy']);
 
-Route::get('/test', function () {
-    return 'ok';
-});
+    // organizations
+    Route::get('/organizations', function () {
+        return response()->json([
+            'data' => \App\Models\Organization::all()
+        ]);
+    });
 
 });
