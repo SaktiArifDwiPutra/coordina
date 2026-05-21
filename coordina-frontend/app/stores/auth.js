@@ -5,7 +5,7 @@ export const useAuthStore = defineStore('auth', {
     user: null,
     token: null,
   }),
-actions: {
+  actions: {
     // Fungsi baru untuk memulihkan ingatan Nuxt
     async fetchUser() {
       if (!process.client) return
@@ -13,11 +13,14 @@ actions: {
       const savedToken = localStorage.getItem('auth_token')
       if (!savedToken) return
 
+      const config = useRuntimeConfig()
+
       try {
-        const userData = await $fetch('http://127.0.0.1:8000/api/user', {
+        const userData = await $fetch(`${config.public.apiUrl}/api/user`, {
           method: 'GET',
           headers: {
             'Accept': 'application/json',
+            // TYPO DIPERBAIKI: sebelumnya Authorizatioan
             'Authorization': `Bearer ${savedToken}`
           }
         })
@@ -31,14 +34,14 @@ actions: {
       }
     },
     async login(loginData) {
+      const config = useRuntimeConfig()
+      
       try {
-        const data = await $fetch('http://localhost:8000/api/login', {
+        const data = await $fetch(`${config.public.apiUrl}/api/login`, {
           method: 'POST',
-          // 👇 INI BAGIAN YANG DITAMBAHKAN 👇
           headers: {
             'Accept': 'application/json'
           },
-          // 👆 👆 👆 👆 👆 👆 👆 👆 👆 👆 👆 👆
           body: loginData
         })
         
