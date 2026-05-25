@@ -7,13 +7,6 @@ import { useAuthStore } from '~/stores/auth'
 
 const config = useRuntimeConfig()
 
-const { data, error, pending } = await useFetch(
-  `${config.public.apiUrl}/api/test`
-)
-
-console.log(data.value)
-console.log(error.value)
-
 const auth = useAuthStore()
 const form = ref({
   email: '',
