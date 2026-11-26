@@ -13,6 +13,7 @@ class OrganizationProfileController extends Controller
     public function show(Request $request)
     {
         $user = $request->user();
+        $user->ensureMpkOrganizationLinked();
 
         if ($user->organization_id === null) {
             return response()->json(['message' => 'Akun belum terhubung ke organisasi.'], 422);
@@ -27,7 +28,9 @@ class OrganizationProfileController extends Controller
 
     public function update(UpdateOrganizationProfileRequest $request)
     {
-        $org = Organization::findOrFail($request->user()->organization_id);
+        $user = $request->user();
+        $user->ensureMpkOrganizationLinked();
+        $org = Organization::findOrFail($user->organization_id);
         $org->update($request->validated());
 
         return response()->json([
@@ -38,7 +41,9 @@ class OrganizationProfileController extends Controller
 
     public function uploadAssets(UploadOrganizationAssetsRequest $request)
     {
-        $org = Organization::findOrFail($request->user()->organization_id);
+        $user = $request->user();
+        $user->ensureMpkOrganizationLinked();
+        $org = Organization::findOrFail($user->organization_id);
 
         if (! $request->hasFile('logo') && ! $request->hasFile('signature_image')) {
             return response()->json(['message' => 'Pilih file logo atau gambar tanda tangan untuk diunggah.'], 422);

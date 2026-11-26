@@ -4,6 +4,10 @@ export default {
     content: [],
   theme: {
   	extend: {
+  		fontFamily: {
+  			sans: ['"Source Sans 3"', 'system-ui', '-apple-system', 'sans-serif'],
+  			heading: ['"Lexend"', 'system-ui', '-apple-system', 'sans-serif'],
+  		},
   		borderRadius: {
   			lg: 'var(--radius)',
   			md: 'calc(var(--radius) - 2px)',

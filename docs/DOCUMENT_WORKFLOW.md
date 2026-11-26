@@ -210,4 +210,3 @@ When the 3-signature document returns to MPK, `admin_mpk` verifies:
 4. **Correction Re-Signing Rules:** When MPK flags a document as `Needs Correction`, who is allowed to edit the corrected fields (Requester vs. MPK), and must all signatures be re-confirmed or only signatures affected after the edit?
 5. **PDF Conversion Infrastructure:** Should DOCX-to-PDF conversion run via headless LibreOffice inside the backend Docker container, or via an external conversion API?
 6. **Signature Asset Constraints:** What image formats, max file size, and transparent-background rules apply to uploaded organization logos and signature images?
-

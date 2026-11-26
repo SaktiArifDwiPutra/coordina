@@ -29,7 +29,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/change-password', [AuthController::class, 'changePassword']);
 
     Route::get('/user', function (Request $request) {
-        return $request->user()->load('organization:id,name,is_mpk,chairperson_name,chairperson_title');
+        $user = $request->user();
+        $user->ensureMpkOrganizationLinked();
+        return $user->load('organization:id,name,is_mpk,chairperson_name,chairperson_title');
     });
 
     Route::middleware(\App\Http\Middleware\EnsureAccountReady::class)->group(function () {

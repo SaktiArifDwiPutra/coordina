@@ -1,3 +1,74 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 33% 97%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 214 52% 24%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 213 33% 94%;
+    --secondary-foreground: 214 52% 24%;
+    --muted: 213 32% 94%;
+    --muted-foreground: 215 20% 40%;
+    --accent: 214 95% 95%;
+    --accent-foreground: 214 52% 24%;
+    --destructive: 347 77% 44%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 213 33% 88%;
+    --input: 214 26% 80%;
+    --ring: 221 83% 53%;
+    --radius: 0.75rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: 'Lexend', system-ui, -apple-system, sans-serif;
+    letter-spacing: -0.015em;
+  }
+
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+  }
+}
+
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(2px);
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+:is(:user-invalid, .user-invalid-fallback) {
+  border-color: #be123c;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}

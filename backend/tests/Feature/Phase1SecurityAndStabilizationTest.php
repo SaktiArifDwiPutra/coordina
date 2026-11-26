@@ -339,5 +339,34 @@ class Phase1SecurityAndStabilizationTest extends TestCase
         $this->assertSame('owner_eskul', $withOrg->fresh()->role);
         $this->assertSame('user', $withoutOrg->fresh()->role);
     }
+
+    public function test_admin_mpk_automatically_links_to_mpk_organization_on_login_and_profile_fetch(): void
+    {
+        $unlinkedAdmin = User::create([
+            'name' => 'Admin MPK Baru',
+            'email' => 'admin.baru@mpk.com',
+            'password' => Hash::make('password123'),
+            'role' => 'admin_mpk',
+            'organization_id' => null,
+        ]);
+
+        $loginRes = $this->postJson('/api/login', [
+            'email' => 'admin.baru@mpk.com',
+            'password' => 'password123',
+        ])->assertStatus(200);
+
+        $this->assertSame($this->mpkOrg->id, $loginRes->json('user.organization_id'));
+        $this->assertTrue((bool) $loginRes->json('user.organization.is_mpk'));
+        $this->assertSame($this->mpkOrg->id, $unlinkedAdmin->fresh()->organization_id);
+
+        // Also verifies /api/organization/profile auto-links an unlinked admin_mpk session
+        $unlinkedAdmin->forceFill(['organization_id' => null])->save();
+
+        $this->actingAs($unlinkedAdmin->fresh(), 'sanctum')
+            ->getJson('/api/organization/profile')
+            ->assertStatus(200)
+            ->assertJsonPath('data.id', $this->mpkOrg->id)
+            ->assertJsonPath('data.is_mpk', true);
+    }
 }
 

@@ -21,6 +21,8 @@ class BorrowWorkflowService
 
     public function submit(User $actor, array $data): BorrowRequest
     {
+        $actor->ensureMpkOrganizationLinked();
+
         if ($actor->organization_id === null) {
             $this->conflictService->abortJson('Akun Anda belum terhubung ke organisasi mana pun.', 422);
         }

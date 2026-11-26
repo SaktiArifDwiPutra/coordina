@@ -39,6 +39,7 @@ class AuthController extends Controller
             ], 403);
         }
 
+        $user->ensureMpkOrganizationLinked();
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([

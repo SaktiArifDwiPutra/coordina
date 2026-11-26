@@ -1,31 +1,51 @@
 <script setup>
-definePageMeta({
-  middleware: ['auth', 'role'],
-  roles: ['admin_mpk', 'owner_eskul'],
-})
-
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import {
+  ClipboardList,
+  CalendarDays,
+  Send,
+  FolderArchive,
+  Users,
+  Settings,
+  KeyRound,
+  LogOut,
+  FileCheck2,
+  ShieldCheck,
+  CheckCircle2,
+  AlertTriangle,
+  Info,
+  X,
+  Copy,
+  Check,
+} from 'lucide-vue-next'
 import { useAuthStore } from '~/stores/auth'
 import { useApi } from '~/composables/useApi'
 import { Label } from '~/components/ui/label'
 import { Input } from '~/components/ui/input'
 import { Button } from '~/components/ui/button'
+import AppDialog from '~/components/ui/dialog/AppDialog.vue'
 import NotificationsBell from '~/components/dashboard/NotificationsBell.vue'
+import RequestsMasterDetail from '~/components/dashboard/RequestsMasterDetail.vue'
 import ScheduleBoard from '~/components/dashboard/ScheduleBoard.vue'
 import BorrowRequestForm from '~/components/dashboard/BorrowRequestForm.vue'
-import MyRequestsPanel from '~/components/dashboard/MyRequestsPanel.vue'
-import OwnerInboxPanel from '~/components/dashboard/OwnerInboxPanel.vue'
-import MpkWorkbenchPanel from '~/components/dashboard/MpkWorkbenchPanel.vue'
 import MpkMasterDataPanel from '~/components/dashboard/MpkMasterDataPanel.vue'
 import OrganizationProfilePanel from '~/components/dashboard/OrganizationProfilePanel.vue'
 import TemplateManagerPanel from '~/components/dashboard/TemplateManagerPanel.vue'
 import DocumentArchivePanel from '~/components/dashboard/DocumentArchivePanel.vue'
 
+definePageMeta({
+  middleware: ['auth', 'role'],
+  roles: ['admin_mpk', 'owner_eskul'],
+})
+
+const route = useRoute()
+const router = useRouter()
 const auth = useAuthStore()
 const { apiFetch, extractErrorMessage } = useApi()
 
 const pageLoading = ref(true)
 let autoSyncInterval = null
+let toastTimer = null
 
 const facilities = ref([])
 const organizations = ref([])
@@ -42,6 +62,9 @@ const loading = ref(true)
 const loadingRequests = ref(true)
 const loadingArchive = ref(false)
 const loadingUsers = ref(false)
+const loadingProfile = ref(false)
+const orgProfileError = ref('')
+const arsipSubTab = ref('archive') // 'archive' | 'templates'
 const downloadingDocumentId = ref(null)
 const regeneratingDocumentId = ref(null)
 const screeningId = ref(null)
@@ -58,7 +81,13 @@ const isUploadingAssets = ref(false)
 const isUploadingTemplate = ref(false)
 const isGeneratingDefaultTemplate = ref(false)
 
-const alertModal = ref({ isOpen: false, title: '', message: '', type: 'info' })
+const preselectedFacilityId = ref('')
+const activeTab = ref('')
+
+// Non-blocking accessible feedback banner / toast
+const statusToast = ref({ open: false, title: '', message: '', type: 'info' })
+
+// Real interactive dialogs (native <dialog> via AppDialog)
 const passwordModal = ref({
   isOpen: false,
   userId: null,
@@ -85,12 +114,20 @@ const changePasswordModal = ref({
   error: '',
   isSubmitting: false,
 })
-const deleteModal = ref({ isOpen: false, userId: null, userName: '', isSubmitting: false })
+const deleteModal = ref({
+  isOpen: false,
+  kind: 'user', // 'user' | 'facility' | 'schedule'
+  targetId: null,
+  title: '',
+  description: '',
+  isSubmitting: false,
+})
 const decisionModal = ref({
   isOpen: false,
   mode: '', // 'screen_reject' | 'owner_approve' | 'owner_reject' | 'request_correction'
   request: null,
   reason: '',
+  error: '',
   isSubmitting: false,
 })
 const reviseModal = ref({
@@ -101,28 +138,107 @@ const reviseModal = ref({
   start_time: '',
   end_time: '',
   reason: '',
+  error: '',
   confirm_signature: true,
   isSubmitting: false,
 })
 
 const isMpk = computed(() => auth.user?.role === 'admin_mpk')
 
-const incomingOwnerRequests = computed(() =>
+const incomingOwnerCount = computed(() =>
   borrowRequests.value.filter(
     (r) =>
       r.owner_organization_id === auth.user?.organization_id &&
       (r.status === 'pending_owner' || (r.status === 'owner_approved' && r.document?.document_status === 'waiting_owner_signature'))
-  )
+  ).length
 )
 
-const mySubmittedRequests = computed(() =>
+const myRevisionNeededCount = computed(() =>
   borrowRequests.value.filter(
-    (r) => r.organization_id === auth.user?.organization_id || r.user_id === auth.user?.id
-  )
+    (r) =>
+      (r.organization_id === auth.user?.organization_id || r.user_id === auth.user?.id) &&
+      r.document?.document_status === 'needs_correction'
+  ).length
 )
 
-function showAlert(title, message, type = 'info') {
-  alertModal.value = { isOpen: true, title, message, type }
+const mpkActionCount = computed(() =>
+  borrowRequests.value.filter(
+    (r) => r.status === 'pending_mpk_screening' || ['owner_approved', 'owner_rejected'].includes(r.status)
+  ).length
+)
+
+const roleTabs = computed(() => {
+  if (isMpk.value) {
+    return [
+      { id: 'meja-kerja', label: 'Meja Kerja MPK', icon: ClipboardList, badge: mpkActionCount.value },
+      { id: 'jadwal', label: 'Jadwal Fasilitas', icon: CalendarDays, badge: 0 },
+      { id: 'pinjam-mpk', label: 'Peminjaman Resmi MPK', icon: Send, badge: 0 },
+      { id: 'arsip-template', label: 'Arsip & Template', icon: FolderArchive, badge: 0 },
+      { id: 'master-data', label: 'Data Master & Akun', icon: Users, badge: 0 },
+      { id: 'pengaturan', label: 'Pengaturan', icon: Settings, badge: 0 },
+    ]
+  }
+  return [
+    { id: 'permohonan', label: 'Permohonan & Izin', icon: ClipboardList, badge: incomingOwnerCount.value + myRevisionNeededCount.value },
+    { id: 'jadwal', label: 'Jadwal Fasilitas', icon: CalendarDays, badge: 0 },
+    { id: 'ajukan', label: 'Ajukan Peminjaman', icon: Send, badge: 0 },
+    { id: 'arsip', label: 'Arsip Surat', icon: FolderArchive, badge: 0 },
+    { id: 'pengaturan', label: 'Pengaturan', icon: Settings, badge: 0 },
+  ]
+})
+
+function setActiveTab(tabId) {
+  activeTab.value = tabId
+  router.replace({ query: { ...route.query, tab: tabId } })
+}
+
+watch(
+  [isMpk, () => route.query.tab],
+  ([mpk, queryTab]) => {
+    const validIds = roleTabs.value.map((t) => t.id)
+    if (typeof queryTab === 'string' && validIds.includes(queryTab)) {
+      activeTab.value = queryTab
+    } else if (!validIds.includes(activeTab.value)) {
+      activeTab.value = mpk ? 'meja-kerja' : 'permohonan'
+    }
+  },
+  { immediate: true }
+)
+
+const myVisibleRequests = computed(() => {
+  if (isMpk.value) return borrowRequests.value
+  return borrowRequests.value.filter(
+    (r) =>
+      r.owner_organization_id === auth.user?.organization_id ||
+      r.organization_id === auth.user?.organization_id ||
+      r.user_id === auth.user?.id
+  )
+})
+
+function showFeedback(title, message, type = 'info') {
+  if (toastTimer) clearTimeout(toastTimer)
+  statusToast.value = { open: true, title, message, type }
+  if (type !== 'error') {
+    toastTimer = setTimeout(() => {
+      statusToast.value.open = false
+    }, 6000)
+  }
+}
+
+function goToProfileTab() {
+  setActiveTab('pengaturan')
+}
+
+function goToBorrowTab(facilityId = '') {
+  if (facilityId) {
+    preselectedFacilityId.value = Number(facilityId)
+    showFeedback(
+      'Fasilitas Dipilih',
+      'Silakan lengkapi tanggal, jam, alasan, dan konfirmasi tanda tangan resmi sesuai prosedur pengajuan.',
+      'info'
+    )
+  }
+  setActiveTab(isMpk.value ? 'pinjam-mpk' : 'ajukan')
 }
 
 async function fetchFacilities(silent = false) {
@@ -180,12 +296,17 @@ async function fetchOrganizations() {
   }
 }
 
-async function fetchOrganizationProfile() {
+async function fetchOrganizationProfile(silent = true) {
+  if (!silent) loadingProfile.value = true
+  orgProfileError.value = ''
   try {
     const res = await apiFetch('/api/organization/profile')
     orgProfile.value = res.data
   } catch (error) {
+    orgProfileError.value = extractErrorMessage(error, 'Gagal memuat profil organisasi.')
     console.error(error)
+  } finally {
+    if (!silent) loadingProfile.value = false
   }
 }
 
@@ -212,7 +333,13 @@ async function fetchArchive(silent = false) {
 }
 
 async function refreshAllData(silent = true) {
-  const tasks = [fetchFacilities(silent), fetchBorrowRequests(silent), fetchArchive(silent), fetchNotifications(), fetchOrganizationProfile()]
+  const tasks = [
+    fetchFacilities(silent),
+    fetchBorrowRequests(silent),
+    fetchArchive(silent),
+    fetchNotifications(),
+    fetchOrganizationProfile(),
+  ]
   if (isMpk.value) {
     tasks.push(fetchEskulUsers(silent), fetchTemplates())
   }
@@ -223,11 +350,13 @@ async function handleSubmitBorrowRequest(payload, resetForm) {
   isSubmittingRequest.value = true
   try {
     const res = await apiFetch('/api/borrow-requests', { method: 'POST', body: payload })
-    showAlert('Berhasil!', res.message, 'success')
+    showFeedback('Pengajuan Terkirim', res.message, 'success')
     resetForm()
+    preselectedFacilityId.value = ''
     await refreshAllData(true)
+    setActiveTab(isMpk.value ? 'meja-kerja' : 'permohonan')
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mengirim pengajuan.'), 'error')
+    showFeedback('Gagal Mengirim Pengajuan', extractErrorMessage(error, 'Gagal mengirim pengajuan.'), 'error')
   } finally {
     isSubmittingRequest.value = false
   }
@@ -236,7 +365,7 @@ async function handleSubmitBorrowRequest(payload, resetForm) {
 async function handleScreenAccept(req) {
   if (screeningId.value === req.id) return
   if (!orgProfile.value?.is_complete_for_signing) {
-    showAlert('Profil Belum Lengkap', 'Lengkapi profil dan gambar tanda tangan MPK terlebih dahulu.', 'error')
+    showFeedback('Profil Belum Lengkap', 'Lengkapi profil dan gambar tanda tangan MPK terlebih dahulu.', 'error')
     return
   }
 
@@ -246,10 +375,10 @@ async function handleScreenAccept(req) {
       method: 'POST',
       body: { decision: 'accept', confirm_signature: true },
     })
-    showAlert('Berhasil!', res.message, 'success')
+    showFeedback('Screening Disimpan', res.message, 'success')
     await refreshAllData(true)
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal memproses screening.'), 'error')
+    showFeedback('Gagal Memproses Screening', extractErrorMessage(error, 'Gagal memproses screening.'), 'error')
   } finally {
     screeningId.value = null
   }
@@ -258,17 +387,17 @@ async function handleScreenAccept(req) {
 async function handleSignDocument(req) {
   if (signingId.value === req.id) return
   if (!orgProfile.value?.is_complete_for_signing) {
-    showAlert('Profil Belum Lengkap', 'Lengkapi profil dan gambar tanda tangan organisasi terlebih dahulu sebelum menandatangani.', 'error')
+    showFeedback('Profil Belum Lengkap', 'Lengkapi profil dan gambar tanda tangan organisasi terlebih dahulu.', 'error')
     return
   }
 
   signingId.value = req.id
   try {
     const res = await apiFetch(`/api/borrow-requests/${req.id}/sign`, { method: 'POST' })
-    showAlert('Berhasil!', res.message, 'success')
+    showFeedback('Tanda Tangan Tersimpan', res.message, 'success')
     await refreshAllData(true)
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal membubuhkan tanda tangan.'), 'error')
+    showFeedback('Gagal Membubuhkan TTD', extractErrorMessage(error, 'Gagal membubuhkan tanda tangan.'), 'error')
   } finally {
     signingId.value = null
   }
@@ -276,16 +405,17 @@ async function handleSignDocument(req) {
 
 function openDecisionModal(mode, req) {
   if (mode === 'owner_approve' && !orgProfile.value?.is_complete_for_signing) {
-    showAlert('Profil Belum Lengkap', 'Lengkapi profil dan gambar tanda tangan organisasi Anda terlebih dahulu.', 'error')
+    showFeedback('Profil Belum Lengkap', 'Lengkapi profil dan gambar tanda tangan organisasi Anda terlebih dahulu.', 'error')
     return
   }
-  decisionModal.value = { isOpen: true, mode, request: req, reason: '', isSubmitting: false }
+  decisionModal.value = { isOpen: true, mode, request: req, reason: '', error: '', isSubmitting: false }
 }
 
 async function submitDecisionModal() {
   const { mode, request, reason } = decisionModal.value
+  decisionModal.value.error = ''
   if ((mode === 'screen_reject' || mode === 'owner_reject' || mode === 'request_correction') && !reason.trim()) {
-    showAlert('Catatan Wajib', 'Harap tuliskan alasan atau catatan revisi.', 'error')
+    decisionModal.value.error = 'Harap tuliskan alasan atau catatan revisi sebelum melanjutkan.'
     return
   }
 
@@ -313,10 +443,10 @@ async function submitDecisionModal() {
       })
     }
     decisionModal.value.isOpen = false
-    showAlert('Berhasil!', res.message, 'success')
+    showFeedback('Keputusan Disimpan', res.message, 'success')
     await refreshAllData(true)
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal memproses keputusan.'), 'error')
+    decisionModal.value.error = extractErrorMessage(error, 'Gagal memproses keputusan.')
   } finally {
     decisionModal.value.isSubmitting = false
   }
@@ -331,6 +461,7 @@ function openReviseModal(req) {
     start_time: String(req.start_time || '').substring(0, 5),
     end_time: String(req.end_time || '').substring(0, 5),
     reason: req.reason || '',
+    error: '',
     confirm_signature: Boolean(orgProfile.value?.is_complete_for_signing),
     isSubmitting: false,
   }
@@ -338,8 +469,9 @@ function openReviseModal(req) {
 
 async function submitReviseModal() {
   const modal = reviseModal.value
+  modal.error = ''
   if (!modal.facility_id || !modal.date || !modal.start_time || !modal.end_time || !modal.reason.trim()) {
-    showAlert('Data Belum Lengkap', 'Lengkapi seluruh data revisi permohonan terlebih dahulu.', 'error')
+    modal.error = 'Lengkapi seluruh data revisi permohonan terlebih dahulu.'
     return
   }
 
@@ -357,10 +489,10 @@ async function submitReviseModal() {
       },
     })
     reviseModal.value.isOpen = false
-    showAlert('Berhasil!', res.message, 'success')
+    showFeedback('Revisi Terkirim', res.message, 'success')
     await refreshAllData(true)
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mengirim revisi permohonan.'), 'error')
+    modal.error = extractErrorMessage(error, 'Gagal mengirim revisi permohonan.')
   } finally {
     modal.isSubmitting = false
   }
@@ -371,9 +503,9 @@ async function handleSaveProfile(payload) {
   try {
     const res = await apiFetch('/api/organization/profile', { method: 'PUT', body: payload })
     orgProfile.value = res.data
-    showAlert('Berhasil!', res.message, 'success')
+    showFeedback('Profil Tersimpan', res.message, 'success')
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal menyimpan profil organisasi.'), 'error')
+    showFeedback('Gagal Menyimpan Profil', extractErrorMessage(error, 'Gagal menyimpan profil organisasi.'), 'error')
   } finally {
     isSavingProfile.value = false
   }
@@ -385,9 +517,9 @@ async function handleUploadAssets(formData, resetFiles) {
     const res = await apiFetch('/api/organization/assets', { method: 'POST', body: formData })
     orgProfile.value = res.data
     resetFiles()
-    showAlert('Berhasil!', res.message, 'success')
+    showFeedback('Aset Diperbarui', res.message, 'success')
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mengunggah aset organisasi.'), 'error')
+    showFeedback('Gagal Mengunggah Aset', extractErrorMessage(error, 'Gagal mengunggah aset organisasi.'), 'error')
   } finally {
     isUploadingAssets.value = false
   }
@@ -398,10 +530,10 @@ async function handleUploadTemplate(formData, resetFile) {
   try {
     const res = await apiFetch('/api/document-templates', { method: 'POST', body: formData })
     resetFile()
-    showAlert('Berhasil!', res.message, 'success')
+    showFeedback('Template Diaktifkan', res.message, 'success')
     await fetchTemplates()
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mengunggah master template.'), 'error')
+    showFeedback('Gagal Mengunggah Template', extractErrorMessage(error, 'Gagal mengunggah master template.'), 'error')
   } finally {
     isUploadingTemplate.value = false
   }
@@ -411,10 +543,10 @@ async function handleGenerateDefaultTemplate() {
   isGeneratingDefaultTemplate.value = true
   try {
     const res = await apiFetch('/api/document-templates/generate-default', { method: 'POST' })
-    showAlert('Berhasil!', res.message, 'success')
+    showFeedback('Template Default Dibuat', res.message, 'success')
     await fetchTemplates()
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal membuat template default.'), 'error')
+    showFeedback('Gagal Membuat Template', extractErrorMessage(error, 'Gagal membuat template default.'), 'error')
   } finally {
     isGeneratingDefaultTemplate.value = false
   }
@@ -430,7 +562,7 @@ async function handleDownloadTemplate(tpl) {
     a.click()
     URL.revokeObjectURL(url)
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mengunduh template.'), 'error')
+    showFeedback('Gagal Mengunduh Template', extractErrorMessage(error, 'Gagal mengunduh template.'), 'error')
   }
 }
 
@@ -439,10 +571,10 @@ async function handleFinalizeRequest(req) {
   finalizingId.value = req.id
   try {
     const res = await apiFetch(`/api/borrow-requests/${req.id}/finalize`, { method: 'POST' })
-    showAlert('Berhasil!', res.message, 'success')
+    showFeedback('Keputusan Akhir Tercatat', res.message, 'success')
     await refreshAllData(true)
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mencatat keputusan akhir.'), 'error')
+    showFeedback('Gagal Mencatat Keputusan', extractErrorMessage(error, 'Gagal mencatat keputusan akhir.'), 'error')
   } finally {
     finalizingId.value = null
   }
@@ -461,7 +593,7 @@ async function handleDownloadPdf(req, inline = false) {
         a.href = url
         a.download = `surat-izin-${req.id}.pdf`
         a.click()
-        showAlert('Pop-up Diblokir', 'Browser memblokir jendela pratinjau. File PDF resmi langsung diunduh ke perangkat Anda.', 'info')
+        showFeedback('Pop-up Diblokir', 'Browser memblokir jendela pratinjau. File PDF resmi langsung diunduh ke perangkat Anda.', 'info')
       }
       setTimeout(() => URL.revokeObjectURL(url), 60000)
     } else {
@@ -472,7 +604,7 @@ async function handleDownloadPdf(req, inline = false) {
       URL.revokeObjectURL(url)
     }
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mengunduh dokumen PDF resmi.'), 'error')
+    showFeedback('Gagal Mengunduh PDF', extractErrorMessage(error, 'Gagal mengunduh dokumen PDF resmi.'), 'error')
   } finally {
     downloadingDocumentId.value = null
   }
@@ -489,7 +621,7 @@ async function handleDownloadDocx(req) {
     a.click()
     URL.revokeObjectURL(url)
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mengunduh dokumen DOCX resmi.'), 'error')
+    showFeedback('Gagal Mengunduh DOCX', extractErrorMessage(error, 'Gagal mengunduh dokumen DOCX resmi.'), 'error')
   } finally {
     downloadingDocumentId.value = null
   }
@@ -499,10 +631,10 @@ async function handleRegeneratePdf(req) {
   regeneratingDocumentId.value = req.id
   try {
     const res = await apiFetch(`/api/borrow-requests/${req.id}/regenerate-pdf`, { method: 'POST' })
-    showAlert('Berhasil!', res.message, 'success')
+    showFeedback('PDF Diproses', res.message, 'success')
     await refreshAllData(true)
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal memproses PDF resmi.'), 'error')
+    showFeedback('Gagal Memproses PDF', extractErrorMessage(error, 'Gagal memproses PDF resmi.'), 'error')
   } finally {
     regeneratingDocumentId.value = null
   }
@@ -512,24 +644,65 @@ async function handleCreateFacility(payload, resetForm) {
   isCreatingFacility.value = true
   try {
     const res = await apiFetch('/api/facilities', { method: 'POST', body: payload })
-    showAlert('Berhasil!', res.message, 'success')
+    showFeedback('Fasilitas Ditambahkan', res.message, 'success')
     resetForm()
     await refreshAllData(true)
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal menambahkan fasilitas.'), 'error')
+    showFeedback('Gagal Menambah Fasilitas', extractErrorMessage(error, 'Gagal menambahkan fasilitas.'), 'error')
   } finally {
     isCreatingFacility.value = false
   }
 }
 
-async function handleDeleteFacility(id) {
-  if (!confirm('Apakah Anda yakin ingin menghapus fasilitas ini beserta seluruh jadwal di dalamnya?')) return
+function openDeleteConfirmation(kind, id, name = '') {
+  if (kind === 'facility') {
+    deleteModal.value = {
+      isOpen: true,
+      kind: 'facility',
+      targetId: id,
+      title: 'Hapus Fasilitas?',
+      description: 'Menghapus fasilitas akan menghapus seluruh jadwal tetap di dalamnya secara permanen.',
+      isSubmitting: false,
+    }
+  } else if (kind === 'schedule') {
+    deleteModal.value = {
+      isOpen: true,
+      kind: 'schedule',
+      targetId: id,
+      title: 'Hapus Jadwal Tetap?',
+      description: 'Hak milik jadwal tetap ini akan dilepas dan slot menjadi terbuka.',
+      isSubmitting: false,
+    }
+  } else {
+    deleteModal.value = {
+      isOpen: true,
+      kind: 'user',
+      targetId: id,
+      title: 'Hapus Akun Ekskul?',
+      description: `Hapus permanen akun ${name}? Riwayat surat organisasi tetap terjaga di arsip.`,
+      isSubmitting: false,
+    }
+  }
+}
+
+async function executeDeleteConfirmed() {
+  const { kind, targetId } = deleteModal.value
+  deleteModal.value.isSubmitting = true
   try {
-    const res = await apiFetch(`/api/facilities/${id}`, { method: 'DELETE' })
-    showAlert('Berhasil!', res.message, 'success')
+    const endpoint =
+      kind === 'facility'
+        ? `/api/facilities/${targetId}`
+        : kind === 'schedule'
+          ? `/api/fixed-schedules/${targetId}`
+          : `/api/users/${targetId}`
+    const res = await apiFetch(endpoint, { method: 'DELETE' })
+    deleteModal.value.isOpen = false
+    showFeedback('Data Dihapus', res.message, 'success')
     await refreshAllData(true)
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal menghapus fasilitas.'), 'error')
+    showFeedback('Gagal Menghapus', extractErrorMessage(error, 'Gagal menghapus data.'), 'error')
+  } finally {
+    deleteModal.value.isSubmitting = false
   }
 }
 
@@ -537,24 +710,13 @@ async function handleCreateSchedule(payload, resetForm) {
   isCreatingSchedule.value = true
   try {
     const res = await apiFetch('/api/fixed-schedules', { method: 'POST', body: payload })
-    showAlert('Berhasil!', res.message, 'success')
+    showFeedback('Jadwal Tetap Tersimpan', res.message, 'success')
     resetForm()
     await refreshAllData(true)
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mendaftarkan jadwal tetap.'), 'error')
+    showFeedback('Gagal Mendaftarkan Jadwal', extractErrorMessage(error, 'Gagal mendaftarkan jadwal tetap.'), 'error')
   } finally {
     isCreatingSchedule.value = false
-  }
-}
-
-async function handleDeleteSchedule(id) {
-  if (!confirm('Hapus hak milik jadwal tetap ini?')) return
-  try {
-    const res = await apiFetch(`/api/fixed-schedules/${id}`, { method: 'DELETE' })
-    showAlert('Berhasil!', res.message, 'success')
-    await refreshAllData(true)
-  } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal menghapus jadwal.'), 'error')
   }
 }
 
@@ -573,11 +735,11 @@ async function handleCreateUser(payload, resetForm) {
         copied: false,
       }
     } else {
-      showAlert('Berhasil!', res.message, 'success')
+      showFeedback('Akun Dibuat', res.message, 'success')
     }
     await refreshAllData(true)
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal membuat akun.'), 'error')
+    showFeedback('Gagal Membuat Akun', extractErrorMessage(error, 'Gagal membuat akun.'), 'error')
   } finally {
     isCreatingUser.value = false
   }
@@ -606,7 +768,7 @@ async function copyHandoverCredentials() {
     await navigator.clipboard.writeText(text)
     handoverModal.value.copied = true
   } catch {
-    showAlert('Salin Manual', text, 'info')
+    showFeedback('Salin Kredensial Manual', text, 'info')
   }
 }
 
@@ -614,10 +776,10 @@ async function handleToggleUserActive(userId) {
   togglingUserId.value = userId
   try {
     const res = await apiFetch(`/api/users/${userId}/toggle-active`, { method: 'PATCH' })
-    showAlert('Berhasil!', res.message, 'success')
+    showFeedback('Status Akun Diperbarui', res.message, 'success')
     await refreshAllData(true)
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mengubah status akun.'), 'error')
+    showFeedback('Gagal Mengubah Status', extractErrorMessage(error, 'Gagal mengubah status akun.'), 'error')
   } finally {
     togglingUserId.value = null
   }
@@ -656,7 +818,7 @@ async function submitChangePassword() {
     auth.user = res.user
     m.isOpen = false
     m.forced = false
-    showAlert('Berhasil!', res.message, 'success')
+    showFeedback('Password Diperbarui', res.message, 'success')
     await refreshAllData(false)
   } catch (error) {
     m.error = extractErrorMessage(error, 'Gagal mengganti password.')
@@ -708,27 +870,13 @@ async function submitPasswordReset() {
         copied: false,
       }
     } else {
-      showAlert('Berhasil!', res.message, 'success')
+      showFeedback('Password Direset', res.message, 'success')
     }
     await refreshAllData(true)
   } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mereset password.'), 'error')
+    showFeedback('Gagal Reset Password', extractErrorMessage(error, 'Gagal mereset password.'), 'error')
   } finally {
     passwordModal.value.isSubmitting = false
-  }
-}
-
-async function executeDeleteUser() {
-  deleteModal.value.isSubmitting = true
-  try {
-    const res = await apiFetch(`/api/users/${deleteModal.value.userId}`, { method: 'DELETE' })
-    deleteModal.value.isOpen = false
-    showAlert('Berhasil!', res.message, 'success')
-    await refreshAllData(true)
-  } catch (error) {
-    showAlert('Gagal!', extractErrorMessage(error, 'Gagal menghapus akun.'), 'error')
-  } finally {
-    deleteModal.value.isSubmitting = false
   }
 }
 
@@ -773,316 +921,322 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (autoSyncInterval) clearInterval(autoSyncInterval)
+  if (toastTimer) clearTimeout(toastTimer)
 })
 </script>
 
 <template>
-  <div v-if="pageLoading" class="min-h-screen flex flex-col items-center justify-center bg-zinc-50">
-    <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-zinc-900 mb-4"></div>
-    <p class="text-zinc-500 font-medium">Memeriksa hak akses ruang kerja...</p>
+  <div v-if="pageLoading" class="min-h-screen flex flex-col items-center justify-center bg-background px-4">
+    <div class="animate-spin rounded-full h-11 w-11 border-b-2 border-[#1E3A5F] mb-4" aria-hidden="true" />
+    <p class="text-sm text-slate-600 font-semibold">Memeriksa hak akses ruang kerja Coordina…</p>
   </div>
 
-  <div v-else class="min-h-screen bg-zinc-50 p-4 sm:p-8 relative">
-    <!-- MODALS -->
-    <div v-if="alertModal.isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div class="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4">
-        <h3 :class="['text-lg font-bold', alertModal.type === 'error' ? 'text-red-600' : 'text-zinc-900']">{{ alertModal.title }}</h3>
-        <p class="text-zinc-600 text-sm leading-relaxed">{{ alertModal.message }}</p>
-        <div class="flex justify-end pt-2">
-          <Button @click="alertModal.isOpen = false" :class="alertModal.type === 'error' ? 'bg-red-600 hover:bg-red-700' : 'bg-zinc-900'">Mengerti</Button>
-        </div>
-      </div>
-    </div>
-
-    <div v-if="passwordModal.isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div class="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4">
-        <h3 class="text-lg font-bold text-zinc-900">Reset Password</h3>
-        <p class="text-sm text-zinc-500">Akun: <span class="font-semibold text-zinc-900">{{ passwordModal.userName }}</span></p>
-        <div class="space-y-2 pt-2">
+  <div v-else class="min-h-screen bg-background flex flex-col">
+    <!-- NATIVE ACCESSIBLE DIALOGS -->
+    <AppDialog
+      :open="passwordModal.isOpen"
+      title="Reset Password Akun"
+      :description="`Akun target: ${passwordModal.userName}`"
+      @update:open="(v) => (passwordModal.isOpen = v)"
+    >
+      <div class="space-y-4">
+        <div class="space-y-1.5">
           <div class="flex items-center justify-between gap-2">
-            <Label>Password Baru</Label>
-            <button type="button" class="text-xs font-semibold text-indigo-600 hover:underline" @click="generateModalTempPassword">
+            <Label for="modal-new-password">Password Baru</Label>
+            <button type="button" class="text-xs font-semibold text-[#1E3A5F] hover:underline" @click="generateModalTempPassword">
               Generate Acak
             </button>
           </div>
-          <Input type="text" v-model="passwordModal.newPassword" placeholder="Kosongkan untuk generate otomatis" />
+          <Input id="modal-new-password" v-model="passwordModal.newPassword" type="text" placeholder="Kosongkan untuk generate otomatis…" class="h-11 rounded-xl" />
         </div>
-        <label class="flex items-center gap-2 text-xs text-zinc-700 cursor-pointer">
-          <input v-model="passwordModal.mustChangePassword" type="checkbox" class="rounded border-zinc-300" />
-          Wajibkan ganti password saat login berikutnya
+        <label class="flex items-center gap-2.5 text-xs text-slate-700 cursor-pointer">
+          <input v-model="passwordModal.mustChangePassword" type="checkbox" class="rounded border-slate-300 h-4 w-4 accent-[#1E3A5F]" />
+          <span>Wajibkan ganti password saat login berikutnya</span>
         </label>
-        <div class="flex justify-end gap-2 pt-4">
-          <Button variant="outline" @click="passwordModal.isOpen = false">Batal</Button>
-          <Button @click="submitPasswordReset" :disabled="passwordModal.isSubmitting" class="bg-indigo-600 text-white">
-            {{ passwordModal.isSubmitting ? 'Menyimpan...' : 'Simpan & Cabut Sesi' }}
+        <div class="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" @click="passwordModal.isOpen = false">Batal</Button>
+          <Button type="button" :disabled="passwordModal.isSubmitting" class="bg-[#1E3A5F] hover:bg-[#152943] text-white" @click="submitPasswordReset">
+            {{ passwordModal.isSubmitting ? 'Menyimpan…' : 'Simpan & Cabut Sesi' }}
           </Button>
         </div>
       </div>
-    </div>
+    </AppDialog>
 
-    <div v-if="handoverModal.isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4">
-        <h3 class="text-lg font-bold text-zinc-900">{{ handoverModal.title }}</h3>
-        <p class="text-xs text-zinc-500">
-          Salin dan serahkan kredensial ini secara aman kepada pengurus baru organisasi <strong>{{ handoverModal.userName }}</strong>.
-        </p>
-        <div class="rounded-xl bg-zinc-50 border border-zinc-200 p-4 space-y-2 text-sm font-mono">
-          <div><span class="text-zinc-500">Email:</span> {{ handoverModal.email }}</div>
-          <div><span class="text-zinc-500">Password:</span> <strong>{{ handoverModal.password }}</strong></div>
+    <AppDialog
+      :open="handoverModal.isOpen"
+      :title="handoverModal.title"
+      :description="`Salin dan serahkan kredensial ini secara aman kepada pengurus organisasi ${handoverModal.userName}.`"
+      max-width-class="max-w-lg"
+      @update:open="(v) => (handoverModal.isOpen = v)"
+    >
+      <div class="space-y-4">
+        <div class="rounded-xl bg-slate-50 border border-border p-4 space-y-2 text-sm tabular-nums">
+          <div><span class="text-slate-500">Email:</span> <strong class="text-slate-900">{{ handoverModal.email }}</strong></div>
+          <div><span class="text-slate-500">Password Sementara:</span> <strong class="text-slate-900">{{ handoverModal.password }}</strong></div>
         </div>
         <div class="flex justify-end gap-2 pt-2">
-          <Button variant="outline" @click="copyHandoverCredentials">
-            {{ handoverModal.copied ? 'Tersalin!' : 'Salin Kredensial' }}
+          <Button type="button" variant="outline" @click="copyHandoverCredentials">
+            <component :is="handoverModal.copied ? Check : Copy" class="w-4 h-4" aria-hidden="true" />
+            <span>{{ handoverModal.copied ? 'Tersalin' : 'Salin Kredensial' }}</span>
           </Button>
-          <Button class="bg-zinc-900 text-white" @click="handoverModal.isOpen = false">Selesai</Button>
+          <Button type="button" class="bg-[#1E3A5F] hover:bg-[#152943] text-white" @click="handoverModal.isOpen = false">Selesai</Button>
         </div>
       </div>
-    </div>
+    </AppDialog>
 
-    <div v-if="changePasswordModal.isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4">
-        <h3 class="text-lg font-bold text-zinc-900">
-          {{ changePasswordModal.forced ? 'Wajib Ganti Password Sementara' : 'Ganti Password Akun' }}
-        </h3>
-        <p class="text-xs text-zinc-500">
-          {{
-            changePasswordModal.forced
-              ? 'Untuk keamanan serah terima organisasi, Anda wajib mengganti password sementara sebelum mengakses dashboard.'
-              : 'Perbarui password akun Anda secara berkala.'
-          }}
-        </p>
-        <div class="space-y-3">
-          <div class="space-y-1">
-            <Label>Password Saat Ini</Label>
-            <Input v-model="changePasswordModal.current_password" type="password" placeholder="Masukkan password saat ini" />
-          </div>
-          <div class="space-y-1">
-            <Label>Password Baru (Minimal 8 Karakter)</Label>
-            <Input v-model="changePasswordModal.new_password" type="password" placeholder="Password baru..." />
-          </div>
-          <div class="space-y-1">
-            <Label>Konfirmasi Password Baru</Label>
-            <Input v-model="changePasswordModal.new_password_confirmation" type="password" placeholder="Ulangi password baru..." />
-          </div>
-          <p v-if="changePasswordModal.error" class="text-xs text-red-600 font-medium">{{ changePasswordModal.error }}</p>
+    <AppDialog
+      :open="changePasswordModal.isOpen"
+      :persistent="changePasswordModal.forced"
+      :title="changePasswordModal.forced ? 'Wajib Ganti Password Sementara' : 'Ganti Password Akun'"
+      :description="
+        changePasswordModal.forced
+          ? 'Untuk keamanan serah terima organisasi, Anda wajib mengganti password sementara sebelum mengakses dashboard.'
+          : 'Perbarui password akun Anda secara berkala.'
+      "
+      @update:open="(v) => !changePasswordModal.forced && (changePasswordModal.isOpen = v)"
+    >
+      <form @submit.prevent="submitChangePassword" class="space-y-3.5">
+        <div class="space-y-1.5">
+          <Label for="cp-current">Password Saat Ini</Label>
+          <Input id="cp-current" v-model="changePasswordModal.current_password" type="password" autocomplete="current-password" placeholder="Masukkan password saat ini…" class="h-11 rounded-xl" />
         </div>
+        <div class="space-y-1.5">
+          <Label for="cp-new">Password Baru (Minimal 8 Karakter)</Label>
+          <Input id="cp-new" v-model="changePasswordModal.new_password" type="password" autocomplete="new-password" placeholder="Password baru…" class="h-11 rounded-xl" />
+        </div>
+        <div class="space-y-1.5">
+          <Label for="cp-confirm">Konfirmasi Password Baru</Label>
+          <Input id="cp-confirm" v-model="changePasswordModal.new_password_confirmation" type="password" autocomplete="new-password" placeholder="Ulangi password baru…" class="h-11 rounded-xl" />
+        </div>
+        <p v-if="changePasswordModal.error" role="alert" class="text-xs text-rose-700 font-semibold">{{ changePasswordModal.error }}</p>
         <div class="flex justify-end gap-2 pt-2">
-          <Button v-if="!changePasswordModal.forced" variant="outline" @click="changePasswordModal.isOpen = false">Batal</Button>
-          <Button v-else variant="outline" class="text-red-600 border-red-200" @click="auth.logout()">Keluar</Button>
-          <Button :disabled="changePasswordModal.isSubmitting" class="bg-indigo-600 text-white" @click="submitChangePassword">
-            {{ changePasswordModal.isSubmitting ? 'Menyimpan...' : 'Simpan Password Baru' }}
+          <Button v-if="!changePasswordModal.forced" type="button" variant="outline" @click="changePasswordModal.isOpen = false">Batal</Button>
+          <Button v-else type="button" variant="outline" class="text-rose-700 border-rose-200" @click="auth.logout()">Keluar</Button>
+          <Button type="submit" :disabled="changePasswordModal.isSubmitting" class="bg-[#1E3A5F] hover:bg-[#152943] text-white">
+            {{ changePasswordModal.isSubmitting ? 'Menyimpan…' : 'Simpan Password Baru' }}
           </Button>
         </div>
-      </div>
-    </div>
+      </form>
+    </AppDialog>
 
-    <div v-if="deleteModal.isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div class="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4">
-        <h3 class="text-lg font-bold text-red-600">Hapus Akun?</h3>
-        <p class="text-zinc-600 text-sm">Hapus permanen akun <span class="font-bold text-zinc-900">{{ deleteModal.userName }}</span>?</p>
-        <div class="flex justify-end gap-2 pt-4">
-          <Button variant="outline" @click="deleteModal.isOpen = false">Batal</Button>
-          <Button @click="executeDeleteUser" :disabled="deleteModal.isSubmitting" class="bg-red-600 text-white">Ya, Hapus</Button>
-        </div>
+    <AppDialog
+      :open="deleteModal.isOpen"
+      :title="deleteModal.title"
+      :description="deleteModal.description"
+      @update:open="(v) => (deleteModal.isOpen = v)"
+    >
+      <div class="flex justify-end gap-2 pt-2">
+        <Button type="button" variant="outline" autofocus @click="deleteModal.isOpen = false">Batal</Button>
+        <Button type="button" :disabled="deleteModal.isSubmitting" class="bg-rose-700 hover:bg-rose-800 text-white" @click="executeDeleteConfirmed">
+          {{ deleteModal.isSubmitting ? 'Menghapus…' : 'Ya, Hapus Permanen' }}
+        </Button>
       </div>
-    </div>
+    </AppDialog>
 
-    <div v-if="decisionModal.isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4">
-        <h3 class="text-lg font-bold text-zinc-900">
-          {{
-            decisionModal.mode === 'owner_approve'
-              ? 'Izinkan Peminjaman Jadwal?'
-              : decisionModal.mode === 'request_correction'
-                ? 'Minta Revisi Dokumen'
-                : 'Tolak Permohonan'
-          }}
-        </h3>
-        <p class="text-zinc-600 text-sm">
-          {{ decisionModal.request?.organization?.name }} · {{ decisionModal.request?.facility?.name }} ({{ decisionModal.request?.date }})
+    <AppDialog
+      :open="decisionModal.isOpen"
+      :title="
+        decisionModal.mode === 'owner_approve'
+          ? 'Izinkan Peminjaman Jadwal?'
+          : decisionModal.mode === 'request_correction'
+            ? 'Minta Perbaikan Berkas'
+            : 'Tolak Permohonan'
+      "
+      :description="`${decisionModal.request?.organization?.name || ''} · ${decisionModal.request?.facility?.name || ''} (${decisionModal.request?.date || ''})`"
+      max-width-class="max-w-lg"
+      @update:open="(v) => (decisionModal.isOpen = v)"
+    >
+      <div class="space-y-4">
+        <p v-if="decisionModal.mode === 'owner_approve'" class="text-sm text-slate-600 leading-relaxed">
+          Dengan menekan tombol konfirmasi, Anda menyetujui peminjaman jadwal organisasi Anda sekaligus membubuhkan tanda tangan resmi Ketua pada surat perizinan.
         </p>
-        <div v-if="decisionModal.mode !== 'owner_approve'" class="space-y-2">
-          <Label>
+        <div v-else class="space-y-1.5">
+          <Label for="decision-reason">
             {{ decisionModal.mode === 'request_correction' ? 'Catatan Revisi untuk Pemohon (Wajib)' : 'Alasan Penolakan (Wajib)' }}
           </Label>
           <textarea
+            id="decision-reason"
             v-model="decisionModal.reason"
             rows="3"
-            placeholder="Tuliskan alasan atau instruksi perbaikan secara jelas..."
-            class="w-full rounded-md border border-zinc-200 p-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900"
+            placeholder="Tuliskan alasan atau instruksi perbaikan secara jelas…"
+            class="w-full rounded-xl border border-input bg-white p-3 text-sm text-slate-900"
           />
         </div>
-        <div class="flex justify-end gap-2 pt-2">
-          <Button variant="outline" @click="decisionModal.isOpen = false">Batal</Button>
+        <p v-if="decisionModal.error" role="alert" class="text-xs text-rose-700 font-semibold">{{ decisionModal.error }}</p>
+        <div class="flex justify-end gap-2 pt-1">
+          <Button type="button" variant="outline" @click="decisionModal.isOpen = false">Batal</Button>
           <Button
-            @click="submitDecisionModal"
+            type="button"
             :disabled="decisionModal.isSubmitting"
             :class="
               decisionModal.mode === 'owner_approve'
-                ? 'bg-green-600 text-white'
+                ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
                 : decisionModal.mode === 'request_correction'
-                  ? 'bg-amber-600 text-white'
-                  : 'bg-red-600 text-white'
+                  ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                  : 'bg-rose-700 hover:bg-rose-800 text-white'
             "
+            @click="submitDecisionModal"
           >
-            {{ decisionModal.isSubmitting ? 'Memproses...' : 'Konfirmasi' }}
+            {{ decisionModal.isSubmitting ? 'Memproses…' : 'Konfirmasi Keputusan' }}
           </Button>
         </div>
       </div>
-    </div>
+    </AppDialog>
 
-    <div v-if="reviseModal.isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 space-y-4">
-        <h3 class="text-lg font-bold text-zinc-900">Ajukan Revisi Permohonan</h3>
-        <p class="text-xs text-zinc-500">
-          Mengirim revisi akan memperbarui versi dokumen dan mengulang siklus tanda tangan pada revisi terbaru.
-        </p>
+    <AppDialog
+      :open="reviseModal.isOpen"
+      title="Ajukan Revisi Permohonan"
+      description="Mengirim revisi akan memperbarui versi dokumen dan mengulang siklus tanda tangan pada revisi terbaru."
+      max-width-class="max-w-lg"
+      @update:open="(v) => (reviseModal.isOpen = v)"
+    >
+      <div class="space-y-4">
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div class="sm:col-span-2 space-y-1">
-            <Label>Fasilitas</Label>
-            <select
-              v-model="reviseModal.facility_id"
-              class="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm"
-            >
+          <div class="sm:col-span-2 space-y-1.5">
+            <Label for="rev-facility">Fasilitas</Label>
+            <select id="rev-facility" v-model="reviseModal.facility_id" class="w-full h-10 rounded-xl border border-input bg-white px-3 text-sm">
               <option v-for="f in facilities" :key="f.id" :value="String(f.id)">{{ f.name }}</option>
             </select>
           </div>
-          <div class="space-y-1">
-            <Label>Tanggal</Label>
-            <Input v-model="reviseModal.date" type="date" />
+          <div class="space-y-1.5">
+            <Label for="rev-date">Tanggal</Label>
+            <Input id="rev-date" v-model="reviseModal.date" type="date" class="h-10 rounded-xl tabular-nums" />
           </div>
           <div class="grid grid-cols-2 gap-2">
-            <div class="space-y-1">
-              <Label>Mulai</Label>
-              <Input v-model="reviseModal.start_time" type="time" />
+            <div class="space-y-1.5">
+              <Label for="rev-start">Mulai</Label>
+              <Input id="rev-start" v-model="reviseModal.start_time" type="time" class="h-10 rounded-xl tabular-nums" />
             </div>
-            <div class="space-y-1">
-              <Label>Selesai</Label>
-              <Input v-model="reviseModal.end_time" type="time" />
+            <div class="space-y-1.5">
+              <Label for="rev-end">Selesai</Label>
+              <Input id="rev-end" v-model="reviseModal.end_time" type="time" class="h-10 rounded-xl tabular-nums" />
             </div>
           </div>
-          <div class="sm:col-span-2 space-y-1">
-            <Label>Alasan / Keperluan</Label>
-            <textarea
-              v-model="reviseModal.reason"
-              rows="3"
-              class="w-full rounded-md border border-zinc-200 p-2.5 text-sm"
-            />
+          <div class="sm:col-span-2 space-y-1.5">
+            <Label for="rev-reason">Alasan / Keperluan</Label>
+            <textarea id="rev-reason" v-model="reviseModal.reason" rows="3" class="w-full rounded-xl border border-input bg-white p-3 text-sm" />
           </div>
-          <label class="sm:col-span-2 flex items-center gap-2 text-xs text-zinc-700">
-            <input v-model="reviseModal.confirm_signature" type="checkbox" class="rounded border-zinc-300" />
-            Bubuhkan ulang tanda tangan tahap 1 pada revisi baru
+          <label class="sm:col-span-2 flex items-center gap-2.5 text-xs text-slate-700 cursor-pointer">
+            <input v-model="reviseModal.confirm_signature" type="checkbox" class="rounded border-slate-300 h-4 w-4 accent-[#1E3A5F]" />
+            <span>Bubuhkan ulang tanda tangan tahap 1 pada revisi baru</span>
           </label>
         </div>
-        <div class="flex justify-end gap-2 pt-2">
-          <Button variant="outline" @click="reviseModal.isOpen = false">Batal</Button>
-          <Button :disabled="reviseModal.isSubmitting" class="bg-amber-600 text-white" @click="submitReviseModal">
-            {{ reviseModal.isSubmitting ? 'Mengirim...' : 'Kirim Revisi' }}
+        <p v-if="reviseModal.error" role="alert" class="text-xs text-rose-700 font-semibold">{{ reviseModal.error }}</p>
+        <div class="flex justify-end gap-2 pt-1">
+          <Button type="button" variant="outline" @click="reviseModal.isOpen = false">Batal</Button>
+          <Button type="button" :disabled="reviseModal.isSubmitting" class="bg-amber-600 hover:bg-amber-700 text-white" @click="submitReviseModal">
+            {{ reviseModal.isSubmitting ? 'Mengirim…' : 'Kirim Revisi' }}
           </Button>
         </div>
       </div>
-    </div>
+    </AppDialog>
 
-    <div class="max-w-6xl mx-auto space-y-10">
-      <!-- HEADER PROFILE -->
-      <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-4 bg-white p-6 rounded-2xl shadow-sm border border-zinc-200">
-        <div>
-          <h1 class="text-2xl font-bold text-zinc-900">Dashboard Coordina</h1>
-          <p class="text-zinc-500">
-            Selamat datang, {{ auth.user?.name || 'User' }}!
-            <span class="font-semibold text-indigo-600">
-              ({{ isMpk ? 'Admin MPK' : (auth.user?.organization?.name || 'Eskul') }})
+    <!-- INSTITUTIONAL TOP HEADER + ROLE-SPECIFIC NAVIGATION -->
+    <header class="bg-gradient-to-r from-[#1E3A5F] to-[#162E4D] text-white shadow-sm">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex items-center justify-between gap-4">
+        <div class="flex items-center gap-3 min-w-0">
+          <div class="h-10 w-10 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+            <FileCheck2 class="w-5 h-5 text-white" aria-hidden="true" />
+          </div>
+          <div class="min-w-0">
+            <h1 class="text-lg font-bold text-white leading-tight truncate">Coordina</h1>
+            <p class="text-xs text-blue-100/90 truncate">
+              SMKN 4 Padalarang · {{ auth.user?.name || 'Pengguna' }}
+            </p>
+          </div>
+        </div>
+
+        <NotificationsBell
+          :notifications="notifications"
+          :unread-count="unreadCount"
+          @mark-read="handleMarkNotificationRead"
+        />
+      </div>
+
+      <!-- ROLE-SCOPED NAVIGATION BAR -->
+      <nav aria-label="Menu Utama Workspace" class="bg-[#E9EFF6] border-t border-white/10 border-b border-border">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex items-center gap-1.5 overflow-x-auto" role="tablist">
+          <button
+            v-for="tab in roleTabs"
+            :key="tab.id"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === tab.id"
+            :class="[
+              'whitespace-nowrap inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold border transition-colors',
+              activeTab === tab.id
+                ? 'bg-white text-[#1E3A5F] border-border shadow-sm'
+                : 'bg-transparent text-slate-700 border-transparent hover:bg-white/60 hover:text-slate-900',
+            ]"
+            @click="setActiveTab(tab.id)"
+          >
+            <component :is="tab.icon" class="w-4 h-4 shrink-0" aria-hidden="true" />
+            <span>{{ tab.label }}</span>
+            <span
+              v-if="tab.badge > 0"
+              :class="[
+                'px-2 py-0.5 rounded-full text-xs font-bold tabular-nums leading-none',
+                activeTab === tab.id ? 'bg-[#1E3A5F] text-white' : 'bg-amber-100 text-amber-900',
+              ]"
+            >
+              {{ tab.badge }}
             </span>
-          </p>
+          </button>
         </div>
-        <div class="flex items-center gap-3">
-          <NotificationsBell
-            :notifications="notifications"
-            :unread-count="unreadCount"
-            @mark-read="handleMarkNotificationRead"
+      </nav>
+    </header>
+
+    <!-- MAIN CONTENT REGION -->
+    <main class="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 flex-1 space-y-5">
+      <!-- Accessible live status banner -->
+      <div
+        v-if="statusToast.open"
+        :role="statusToast.type === 'error' ? 'alert' : 'status'"
+        :aria-live="statusToast.type === 'error' ? 'assertive' : 'polite'"
+        :class="[
+          'rounded-2xl border px-4 py-3.5 flex items-start justify-between gap-3 shadow-sm',
+          statusToast.type === 'error'
+            ? 'bg-rose-50 border-rose-300 text-rose-950'
+            : statusToast.type === 'success'
+              ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+              : 'bg-blue-50 border-blue-200 text-slate-900',
+        ]"
+      >
+        <div class="flex items-start gap-2.5 text-sm">
+          <component
+            :is="statusToast.type === 'error' ? AlertTriangle : statusToast.type === 'success' ? CheckCircle2 : Info"
+            class="w-5 h-5 shrink-0 mt-0.5"
+            aria-hidden="true"
           />
-          <button
-            @click="openVoluntaryChangePassword"
-            class="px-3 py-2 bg-zinc-100 text-zinc-700 hover:bg-zinc-200 font-medium rounded-lg transition-colors text-sm"
-          >
-            Ganti Password
-          </button>
-          <button
-            @click="auth.logout()"
-            class="px-4 py-2 bg-red-50 text-red-600 hover:bg-red-100 font-medium rounded-lg transition-colors text-sm"
-          >
-            Keluar
-          </button>
+          <div>
+            <p class="font-bold">{{ statusToast.title }}</p>
+            <p class="text-xs sm:text-sm mt-0.5">{{ statusToast.message }}</p>
+          </div>
         </div>
+        <button
+          type="button"
+          aria-label="Tutup pesan status"
+          class="rounded-lg p-1 text-slate-600 hover:bg-black/5 shrink-0"
+          @click="statusToast.open = false"
+        >
+          <X class="w-4 h-4" aria-hidden="true" />
+        </button>
       </div>
 
-      <ScheduleBoard
-        :facilities="facilities"
-        :loading="loading"
-        :is-mpk="isMpk"
-        @delete-facility="handleDeleteFacility"
-        @delete-schedule="handleDeleteSchedule"
-      />
-
-      <!-- ESKUL WORKSPACE (Workflow A + Incoming Owner Inbox) -->
-      <div v-if="!isMpk" class="space-y-10">
-        <OwnerInboxPanel
-          :requests="incomingOwnerRequests"
-          :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
-          :signing-id="signingId"
-          @approve="(req) => openDecisionModal('owner_approve', req)"
-          @reject="(req) => openDecisionModal('owner_reject', req)"
-          @sign="handleSignDocument"
-        />
-
-        <BorrowRequestForm
-          :facilities="facilities"
-          :submitting="isSubmittingRequest"
-          :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
-          title="Ajukan Peminjaman Fasilitas"
-          subtitle="Pengajuan akan melalui screening MPK sebelum diteruskan ke pemilik jadwal tetap."
-          @submit="handleSubmitBorrowRequest"
-        />
-
-        <MyRequestsPanel
-          :requests="mySubmittedRequests"
+      <!-- ADMIN MPK WORKSPACE (Strictly MPK-scoped menus & actions) -->
+      <template v-if="isMpk">
+        <RequestsMasterDetail
+          v-if="activeTab === 'meja-kerja'"
+          :requests="myVisibleRequests"
           :loading="loadingRequests"
-          :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
-          :downloading-id="downloadingDocumentId"
-          :signing-id="signingId"
-          @revise="openReviseModal"
-          @sign="handleSignDocument"
-          @download-pdf="handleDownloadPdf"
-          @download-docx="handleDownloadDocx"
-        />
-
-        <DocumentArchivePanel
-          :items="archiveItems"
-          :loading="loadingArchive"
-          :is-mpk="false"
-          :downloading-id="downloadingDocumentId"
-          @refresh="fetchArchive(false)"
-          @download-pdf="handleDownloadPdf"
-          @download-docx="handleDownloadDocx"
-        />
-
-        <OrganizationProfilePanel
-          :profile="orgProfile"
-          :saving="isSavingProfile"
-          :uploading="isUploadingAssets"
-          @save-profile="handleSaveProfile"
-          @upload-assets="handleUploadAssets"
-        />
-      </div>
-
-      <!-- MPK WORKSPACE (Screening, Final Recording, Workflow B, Master Data) -->
-      <div v-else class="space-y-12">
-        <MpkWorkbenchPanel
-          :requests="borrowRequests"
+          :is-mpk="true"
+          :user-org-id="auth.user?.organization_id"
+          :user-id="auth.user?.id"
           :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
           :screening-id="screeningId"
           :finalizing-id="finalizingId"
           :signing-id="signingId"
+          :downloading-id="downloadingDocumentId"
           :regenerating-id="regeneratingDocumentId"
           @screen-accept="handleScreenAccept"
           @screen-reject="(req) => openDecisionModal('screen_reject', req)"
@@ -1090,60 +1244,96 @@ onUnmounted(() => {
           @finalize="handleFinalizeRequest"
           @sign="handleSignDocument"
           @regenerate-pdf="handleRegeneratePdf"
+          @download-pdf="handleDownloadPdf"
+          @download-docx="handleDownloadDocx"
+          @go-profile="goToProfileTab"
+          @go-apply="goToBorrowTab()"
+        />
+
+        <ScheduleBoard
+          v-else-if="activeTab === 'jadwal'"
+          :facilities="facilities"
+          :loading="loading"
+          :is-mpk="true"
+          @delete-facility="(id) => openDeleteConfirmation('facility', id)"
+          @delete-schedule="(id) => openDeleteConfirmation('schedule', id)"
+          @borrow-facility="(facilityId) => goToBorrowTab(facilityId)"
         />
 
         <BorrowRequestForm
+          v-else-if="activeTab === 'pinjam-mpk'"
           :facilities="facilities"
           :submitting="isSubmittingRequest"
           :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
-          title="Ajukan Peminjaman oleh MPK (Kebutuhan Sekolah)"
-          subtitle="Permintaan langsung dikirim ke organisasi pemilik jadwal tanpa tahap screening terpisah."
-          @submit="handleSubmitBorrowRequest"
-        />
-
-        <MyRequestsPanel
-          :requests="mySubmittedRequests"
-          :loading="loadingRequests"
-          :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
-          :downloading-id="downloadingDocumentId"
-          :signing-id="signingId"
-          @revise="openReviseModal"
-          @sign="handleSignDocument"
-          @download-pdf="handleDownloadPdf"
-          @download-docx="handleDownloadDocx"
-        />
-
-        <DocumentArchivePanel
-          :items="archiveItems"
-          :loading="loadingArchive"
           :is-mpk="true"
-          :downloading-id="downloadingDocumentId"
-          :regenerating-id="regeneratingDocumentId"
-          @refresh="fetchArchive(false)"
-          @download-pdf="handleDownloadPdf"
-          @download-docx="handleDownloadDocx"
-          @regenerate-pdf="handleRegeneratePdf"
+          :user-org-id="auth.user?.organization_id"
+          :preselected-facility-id="preselectedFacilityId"
+          title="Ajukan Peminjaman Resmi MPK (Kebutuhan Sekolah)"
+          subtitle="Permintaan langsung dikirim ke organisasi pemilik jadwal tanpa tahap screening terpisah (2 tanda tangan)."
+          @submit="handleSubmitBorrowRequest"
+          @go-profile="goToProfileTab"
         />
 
-        <TemplateManagerPanel
-          :templates="templates"
-          :required-placeholders="requiredPlaceholders"
-          :uploading="isUploadingTemplate"
-          :generating-default="isGeneratingDefaultTemplate"
-          @upload-template="handleUploadTemplate"
-          @generate-default="handleGenerateDefaultTemplate"
-          @download-template="handleDownloadTemplate"
-        />
+        <div v-else-if="activeTab === 'arsip-template'" class="space-y-5">
+          <div class="bg-white rounded-2xl border border-border shadow-sm p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 class="text-base font-bold text-slate-900">Arsip Surat &amp; Master Template</h2>
+              <p class="text-xs text-slate-600 mt-0.5">Pilih antara daftar arsip surat resmi atau pengelolaan template DOCX.</p>
+            </div>
+            <div class="grid grid-cols-2 sm:inline-flex gap-1.5 bg-slate-100 p-1 rounded-xl border border-border" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                :aria-selected="arsipSubTab === 'archive'"
+                :class="[
+                  'px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors',
+                  arsipSubTab === 'archive' ? 'bg-[#1E3A5F] text-white shadow-sm' : 'text-slate-700 hover:bg-white',
+                ]"
+                @click="arsipSubTab = 'archive'"
+              >
+                Arsip Surat ({{ archiveItems.length }})
+              </button>
+              <button
+                type="button"
+                role="tab"
+                :aria-selected="arsipSubTab === 'templates'"
+                :class="[
+                  'px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors',
+                  arsipSubTab === 'templates' ? 'bg-[#1E3A5F] text-white shadow-sm' : 'text-slate-700 hover:bg-white',
+                ]"
+                @click="arsipSubTab = 'templates'"
+              >
+                Template DOCX ({{ templates.length }})
+              </button>
+            </div>
+          </div>
 
-        <OrganizationProfilePanel
-          :profile="orgProfile"
-          :saving="isSavingProfile"
-          :uploading="isUploadingAssets"
-          @save-profile="handleSaveProfile"
-          @upload-assets="handleUploadAssets"
-        />
+          <DocumentArchivePanel
+            v-if="arsipSubTab === 'archive'"
+            :items="archiveItems"
+            :loading="loadingArchive"
+            :is-mpk="true"
+            :downloading-id="downloadingDocumentId"
+            :regenerating-id="regeneratingDocumentId"
+            @refresh="fetchArchive(false)"
+            @download-pdf="handleDownloadPdf"
+            @download-docx="handleDownloadDocx"
+            @regenerate-pdf="handleRegeneratePdf"
+          />
+          <TemplateManagerPanel
+            v-else
+            :templates="templates"
+            :required-placeholders="requiredPlaceholders"
+            :uploading="isUploadingTemplate"
+            :generating-default="isGeneratingDefaultTemplate"
+            @upload-template="handleUploadTemplate"
+            @generate-default="handleGenerateDefaultTemplate"
+            @download-template="handleDownloadTemplate"
+          />
+        </div>
 
         <MpkMasterDataPanel
+          v-else-if="activeTab === 'master-data'"
           :facilities="facilities"
           :organizations="organizations"
           :eskul-users="eskulUsers"
@@ -1157,9 +1347,126 @@ onUnmounted(() => {
           @create-user="handleCreateUser"
           @reset-password="(id, name, email) => (passwordModal = { isOpen: true, userId: id, userName: name, userEmail: email || '', newPassword: '', mustChangePassword: true, isSubmitting: false })"
           @toggle-active="handleToggleUserActive"
-          @delete-user="(id, name) => (deleteModal = { isOpen: true, userId: id, userName: name, isSubmitting: false })"
+          @delete-user="(id, name) => openDeleteConfirmation('user', id, name)"
         />
+      </template>
+
+      <!-- OWNER ESKUL WORKSPACE (Strictly Eskul-scoped menus & actions) -->
+      <template v-else>
+        <RequestsMasterDetail
+          v-if="activeTab === 'permohonan'"
+          :requests="myVisibleRequests"
+          :loading="loadingRequests"
+          :is-mpk="false"
+          :user-org-id="auth.user?.organization_id"
+          :user-id="auth.user?.id"
+          :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
+          :signing-id="signingId"
+          :downloading-id="downloadingDocumentId"
+          @approve="(req) => openDecisionModal('owner_approve', req)"
+          @reject="(req) => openDecisionModal('owner_reject', req)"
+          @sign="handleSignDocument"
+          @revise="openReviseModal"
+          @download-pdf="handleDownloadPdf"
+          @download-docx="handleDownloadDocx"
+          @go-profile="goToProfileTab"
+          @go-apply="goToBorrowTab()"
+        />
+
+        <ScheduleBoard
+          v-else-if="activeTab === 'jadwal'"
+          :facilities="facilities"
+          :loading="loading"
+          :is-mpk="false"
+          @borrow-facility="(facilityId) => goToBorrowTab(facilityId)"
+        />
+
+        <BorrowRequestForm
+          v-else-if="activeTab === 'ajukan'"
+          :facilities="facilities"
+          :submitting="isSubmittingRequest"
+          :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
+          :is-mpk="false"
+          :user-org-id="auth.user?.organization_id"
+          :preselected-facility-id="preselectedFacilityId"
+          title="Ajukan Peminjaman Fasilitas"
+          subtitle="Pengajuan akan melalui pemeriksaan MPK sebelum diteruskan ke pemilik jadwal tetap (atau langsung diteruskan pada slot kosong)."
+          @submit="handleSubmitBorrowRequest"
+          @go-profile="goToProfileTab"
+        />
+
+        <DocumentArchivePanel
+          v-else-if="activeTab === 'arsip'"
+          :items="archiveItems"
+          :loading="loadingArchive"
+          :is-mpk="false"
+          :downloading-id="downloadingDocumentId"
+          @refresh="fetchArchive(false)"
+          @download-pdf="handleDownloadPdf"
+          @download-docx="handleDownloadDocx"
+        />
+      </template>
+
+      <!-- DEDICATED SETTINGS TAB (Logo, TTD, Change Password & Logout for both roles) -->
+      <div v-if="activeTab === 'pengaturan'" class="max-w-5xl mx-auto space-y-6">
+        <OrganizationProfilePanel
+          :profile="orgProfile"
+          :loading-profile="loadingProfile"
+          :profile-error="orgProfileError"
+          :saving="isSavingProfile"
+          :uploading="isUploadingAssets"
+          @save-profile="handleSaveProfile"
+          @upload-assets="handleUploadAssets"
+          @retry-profile="fetchOrganizationProfile(false)"
+        />
+
+        <section class="bg-white rounded-2xl border border-border shadow-sm p-6 space-y-4">
+          <div class="flex items-start gap-3">
+            <div class="h-10 w-10 rounded-xl bg-slate-100 text-[#1E3A5F] flex items-center justify-center shrink-0">
+              <ShieldCheck class="w-5 h-5" aria-hidden="true" />
+            </div>
+            <div>
+              <h3 class="text-base font-bold text-slate-900">Keamanan &amp; Sesi Akun</h3>
+              <p class="text-sm text-slate-600 mt-0.5">
+                Kelola kata sandi dan akhiri sesi login Anda di perangkat ini.
+              </p>
+            </div>
+          </div>
+
+          <div class="rounded-xl bg-slate-50 border border-border p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+            <div>
+              <span class="text-xs font-semibold text-slate-500 block">Nama Akun</span>
+              <strong class="text-slate-900">{{ auth.user?.name || '-' }}</strong>
+            </div>
+            <div>
+              <span class="text-xs font-semibold text-slate-500 block">Email Terdaftar</span>
+              <strong class="text-slate-900 break-all">{{ auth.user?.email || '-' }}</strong>
+            </div>
+          </div>
+
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+            <Button
+              type="button"
+              variant="outline"
+              class="h-11 rounded-xl border-slate-300 text-slate-800 hover:bg-slate-50"
+              @click="openVoluntaryChangePassword"
+            >
+              <KeyRound class="w-4 h-4" aria-hidden="true" />
+              <span>Ganti Password</span>
+            </Button>
+
+            <Button
+              type="button"
+              variant="outline"
+              class="h-11 rounded-xl border-rose-300 text-rose-700 hover:bg-rose-50"
+              @click="auth.logout()"
+            >
+              <LogOut class="w-4 h-4" aria-hidden="true" />
+              <span>Keluar dari Akun</span>
+            </Button>
+          </div>
+        </section>
       </div>
-    </div>
+    </main>
   </div>
 </template>

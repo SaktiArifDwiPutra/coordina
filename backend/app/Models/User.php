@@ -47,4 +47,27 @@ class User extends Authenticatable
     {
         return $this->belongsTo(Organization::class);
     }
+
+    /**
+     * Automatically link admin_mpk accounts to the canonical MPK organization if unlinked.
+     */
+    public function ensureMpkOrganizationLinked(): ?int
+    {
+        if ($this->role !== 'admin_mpk') {
+            return $this->organization_id;
+        }
+
+        if ($this->organization_id !== null) {
+            $currentOrg = Organization::find($this->organization_id);
+            if ($currentOrg && $currentOrg->is_mpk) {
+                return $this->organization_id;
+            }
+        }
+
+        $mpkOrg = Organization::resolveMpkOrganization();
+        $this->forceFill(['organization_id' => $mpkOrg->id])->save();
+        $this->setRelation('organization', $mpkOrg);
+
+        return $mpkOrg->id;
+    }
 }
