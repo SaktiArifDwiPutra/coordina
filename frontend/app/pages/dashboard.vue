@@ -8,18 +8,13 @@ import { Button } from '~/components/ui/button'
 
 const config = useRuntimeConfig()
 
-// OPTIMASI 1: Gunakan lazy: true agar tidak memblokir render UI (mencegah Element Render Delay 82 detik)
-const { data } = useFetch(
-  `${config.public.apiUrl}/api/test`,
-  { lazy: true }
-)
-
-// Gunakan watch jika ingin melihat hasilnya saat sudah di-load, tanpa memblokir komponen
-// watch(data, (newVal) => console.log(newVal))
-
 const auth = useAuthStore()
 const pageLoading = ref(true)
 let autoSyncInterval = null
+
+function extractErrorMessage(error, fallback) {
+  return error?.data?.message || error?.response?._data?.message || fallback
+}
 
 // --- STATE DATA MASTER ---
 const facilities = ref([])
@@ -177,7 +172,7 @@ async function refreshAllData(silent = true) {
     fetchFacilities(silent),
     fetchBorrowRequests(silent)
   ]
-  if (['admin', 'admin_mpk'].includes(auth.user?.role)) {
+  if (auth.user?.role === 'admin_mpk') {
     tasks.push(fetchEskulUsers(silent))
   }
   await Promise.all(tasks)
@@ -196,7 +191,7 @@ async function createFacility() {
     facilityForm.value = { name: '', type: '', description: '' }
     refreshAllData()
   } catch (error) {
-    showAlert('Gagal!', 'Gagal menambahkan fasilitas.', 'error')
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal menambahkan fasilitas.'), 'error')
   } finally {
     isCreatingFacility.value = false
   }
@@ -212,7 +207,7 @@ async function deleteFacility(id) {
     showAlert('Berhasil!', response.message, 'success')
     refreshAllData()
   } catch (error) {
-    showAlert('Gagal!', 'Gagal menghapus fasilitas.', 'error')
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal menghapus fasilitas.'), 'error')
   }
 }
 
@@ -228,7 +223,7 @@ async function createFixedSchedule() {
     scheduleForm.value = { facility_id: '', organization_id: '', day: 'Monday', start_time: '', end_time: '' }
     refreshAllData()
   } catch (error) {
-    showAlert('Gagal!', 'Gagal mendaftarkan jadwal tetap.', 'error')
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mendaftarkan jadwal tetap.'), 'error')
   } finally {
     isCreatingSchedule.value = false
   }
@@ -244,7 +239,7 @@ async function deleteFixedSchedule(id) {
     showAlert('Berhasil!', response.message, 'success')
     refreshAllData()
   } catch (error) {
-    showAlert('Gagal!', 'Gagal menghapus jadwal.', 'error')
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal menghapus jadwal.'), 'error')
   }
 }
 
@@ -261,7 +256,7 @@ async function createEskulUser() {
     newUserForm.value = { name: '', email: '', password: '', organization_id: '' }
     refreshAllData()
   } catch (error) {
-    showAlert('Gagal!', error.response?._data?.message || 'Gagal membuat akun.', 'error')
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal membuat akun.'), 'error')
   } finally {
     isCreatingUser.value = false
   }
@@ -278,7 +273,7 @@ async function submitPasswordReset() {
     passwordModal.value.isOpen = false
     showAlert('Berhasil!', response.message, 'success')
   } catch (error) {
-    showAlert('Gagal!', 'Terjadi kesalahan.', 'error')
+    showAlert('Gagal!', extractErrorMessage(error, 'Terjadi kesalahan.'), 'error')
   } finally {
     passwordModal.value.isSubmitting = false
   }
@@ -295,7 +290,7 @@ async function executeDeleteUser() {
     showAlert('Berhasil!', response.message, 'success')
     refreshAllData()
   } catch (error) {
-    showAlert('Gagal!', 'Gagal menghapus.', 'error')
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal menghapus.'), 'error')
   } finally {
     deleteModal.value.isSubmitting = false
   }
@@ -315,7 +310,7 @@ async function updateRequestStatus(id, newStatus, fromModal = false) {
     }
     await refreshAllData(true)
   } catch (error) {
-    showAlert('Gagal!', 'Terjadi kesalahan', 'error')
+    showAlert('Gagal!', extractErrorMessage(error, 'Terjadi kesalahan.'), 'error')
   } finally {
     if (fromModal) approvalModal.value.isSubmitting = false
   }
@@ -333,7 +328,7 @@ async function submitRequest() {
     form.value = { facility_id: '', date: '', start_time: '', end_time: '', reason: '' }
     refreshAllData()
   } catch (error) {
-    showAlert('Gagal!', error.response?._data?.message || 'Terjadi kesalahan.', 'error')
+    showAlert('Gagal!', extractErrorMessage(error, 'Terjadi kesalahan.'), 'error')
   } finally {
     isSubmitting.value = false
   }
@@ -351,7 +346,7 @@ onMounted(async () => {
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long' })
   if (days.map(d => d.key).includes(today)) activeDay.value = today
   
-  if (['admin', 'admin_mpk'].includes(auth.user.role)) {
+  if (auth.user.role === 'admin_mpk') {
     fetchOrganizations()
   }
   await refreshAllData(false)
@@ -425,7 +420,7 @@ onUnmounted(() => {
       <div class="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-zinc-200">
         <div>
           <h1 class="text-2xl font-bold text-zinc-900">Dashboard Coordina</h1>
-          <p class="text-zinc-500">Selamat datang, {{ auth.user?.name || 'User' }}! <span class="font-semibold text-indigo-600">({{ ['admin', 'admin_mpk'].includes(auth.user?.role) ? 'Admin MPK' : 'Eskul' }})</span></p>
+          <p class="text-zinc-500">Selamat datang, {{ auth.user?.name || 'User' }}! <span class="font-semibold text-indigo-600">({{ auth.user?.role === 'admin_mpk' ? 'Admin MPK' : 'Eskul' }})</span></p>
         </div>
         <button @click="handleLogout" class="px-4 py-2 bg-red-50 text-red-600 hover:bg-red-100 font-medium rounded-lg transition-colors">Keluar</button>
       </div>
@@ -445,7 +440,7 @@ onUnmounted(() => {
                 <CardTitle class="text-lg">{{ facility.name }}</CardTitle>
                 <span class="text-xs px-2 py-0.5 bg-zinc-100 text-zinc-600 rounded-md mt-1 inline-block">{{ facility.type }}</span>
               </div>
-              <Button v-if="['admin', 'admin_mpk'].includes(auth.user?.role)" @click="deleteFacility(facility.id)" variant="outline" size="sm" class="text-red-600 border-red-100 hover:bg-red-50 p-2 h-8">Hapus</Button>
+              <Button v-if="auth.user?.role === 'admin_mpk'" @click="deleteFacility(facility.id)" variant="outline" size="sm" class="text-red-600 border-red-100 hover:bg-red-50 p-2 h-8">Hapus</Button>
             </CardHeader>
             <CardContent class="pt-4 bg-zinc-50/50 flex-1 space-y-3">
               
@@ -463,7 +458,7 @@ onUnmounted(() => {
                     <span class="font-bold text-zinc-900">{{ fs.start_time.substring(0,5) }} - {{ fs.end_time.substring(0,5) }}</span><br>
                     <span class="text-xs text-zinc-500">Pemilik: {{ fs.organization?.name }}</span>
                   </div>
-                  <button v-if="['admin', 'admin_mpk'].includes(auth.user?.role)" @click="deleteFixedSchedule(fs.id)" class="text-red-500 hover:text-red-700 text-xs font-medium">Hapus</button>
+                  <button v-if="auth.user?.role === 'admin_mpk'" @click="deleteFixedSchedule(fs.id)" class="text-red-500 hover:text-red-700 text-xs font-medium">Hapus</button>
                 </div>
               </template>
 
@@ -482,7 +477,7 @@ onUnmounted(() => {
       </div>
 
       <!-- TAMPILAN KHUSUS ESKUL -->
-      <div v-if="!['admin', 'admin_mpk'].includes(auth.user?.role)" class="space-y-12 mt-12">
+      <div v-if="auth.user?.role !== 'admin_mpk'" class="space-y-12 mt-12">
         <div v-if="borrowRequests.filter(r => r.owner_organization_id === auth.user?.organization_id && r.status === 'pending_owner').length > 0">
           <h2 class="text-xl font-bold text-zinc-900 mb-4 flex items-center gap-2"><span>🔔</span> Permohonan Izin Masuk</h2>
           <div class="space-y-4">
@@ -520,7 +515,7 @@ onUnmounted(() => {
       </div>
 
       <!-- TAMPILAN KHUSUS ADMIN MPK -->
-      <div v-if="['admin', 'admin_mpk'].includes(auth.user?.role)" class="space-y-12 mt-12">
+      <div v-if="auth.user?.role === 'admin_mpk'" class="space-y-12 mt-12">
         
         <!-- MEJA KERJA MPK -->
         <div>

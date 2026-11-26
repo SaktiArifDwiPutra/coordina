@@ -7,22 +7,13 @@ use App\Http\Controllers\FacilityController;
 use App\Http\Controllers\BorrowRequestController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\FixedScheduleController;
+use App\Models\Organization;
 
 // =======================
 // PUBLIC ROUTES
 // =======================
 
-Route::post('/login', [AuthController::class, 'login']);
-
-Route::get('/test', function () {
-    return response()->json([
-        'message' => 'API OK'
-    ]);
-});
-
-Route::get('/dns-test', function () {
-    return gethostbyname('ep-rapid-bar-aq1ugwbd.c-8.us-east-1.aws.neon.tech');
-});
+Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:login');
 
 // =======================
 // PROTECTED ROUTES
@@ -34,7 +25,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
 
     Route::get('/user', function (Request $request) {
-        return $request->user();
+        return $request->user()->load('organization:id,name');
     });
 
     // facilities
@@ -60,7 +51,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // organizations
     Route::get('/organizations', function () {
         return response()->json([
-            'data' => \App\Models\Organization::all()
+            'data' => Organization::all(),
         ]);
     });
 

@@ -26,47 +26,29 @@ class DatabaseSeeder extends Seeder
         // 2. Buat Data Organisasi/Eskul
         $basket = Organization::create([
             'name' => 'Eskul Basket',
-            'advisor_name' => 'Pak Budi'
+            'advisor_name' => 'Pak Budi',
         ]);
 
         $mpk = Organization::create([
             'name' => 'MPK / OSIS',
-            'advisor_name' => 'Bu Siti'
+            'advisor_name' => 'Bu Siti',
         ]);
 
-        // 3. Buat Data Users dengan Role Berbeda
-        
-        // Akun Admin / MPK
+        // 3. Buat Akun Organisasional (2 Role MVP: admin_mpk & owner_eskul)
         User::create([
             'name' => 'Admin MPK',
             'email' => 'admin@mpk.com',
             'password' => Hash::make('password'),
-            'year' => '2024',
-            'major' => 'RPL',
-            'class' => 'A',
             'role' => 'admin_mpk',
+            'organization_id' => $mpk->id,
         ]);
 
-        // Akun Pemilik Eskul (Contoh: Basket)
         User::create([
             'name' => 'Ketua Basket',
             'email' => 'ketua@basket.com',
             'password' => Hash::make('password'),
-            'year' => '2024',
-            'major' => 'TKJ',
-            'class' => 'A',
             'role' => 'owner_eskul',
-        ]);
-
-        // Akun User / Peminjam Biasa
-        User::create([
-            'name' => 'Siswa Peminjam',
-            'email' => 'siswa@sekolah.com',
-            'password' => Hash::make('password'),
-            'year' => '2024',
-            'major' => 'RPL',
-            'class' => 'B',
-            'role' => 'user',
+            'organization_id' => $basket->id,
         ]);
     }
 }

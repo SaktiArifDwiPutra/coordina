@@ -2,32 +2,22 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\StoreFixedScheduleRequest;
 use App\Models\FixedSchedule;
 use Illuminate\Http\Request;
 
 class FixedScheduleController extends Controller
 {
-    // Tambah Jadwal Tetap Eskul
-    public function store(Request $request)
+    public function store(StoreFixedScheduleRequest $request)
     {
-        if ($request->user()->role !== 'admin_mpk') {
-            return response()->json(['message' => 'Akses ditolak'], 403);
-        }
+        $schedule = FixedSchedule::create($request->validated());
 
-        $request->validate([
-            'facility_id' => 'required|exists:facilities,id',
-            'organization_id' => 'required|exists:organizations,id',
-            'day' => 'required|string', // Monday, Tuesday, dst.
-            'start_time' => 'required',
-            'end_time' => 'required',
-        ]);
-
-        FixedSchedule::create($request->all());
-
-        return response()->json(['message' => 'Jadwal tetap berhasil didaftarkan!']);
+        return response()->json([
+            'message' => 'Jadwal tetap berhasil didaftarkan!',
+            'data' => $schedule,
+        ], 201);
     }
 
-    // Hapus Jadwal Tetap
     public function destroy(Request $request, $id)
     {
         if ($request->user()->role !== 'admin_mpk') {
@@ -35,6 +25,7 @@ class FixedScheduleController extends Controller
         }
 
         FixedSchedule::findOrFail($id)->delete();
+
         return response()->json(['message' => 'Jadwal tetap berhasil dihapus.']);
     }
 }

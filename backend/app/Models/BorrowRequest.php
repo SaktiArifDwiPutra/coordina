@@ -14,6 +14,11 @@ class BorrowRequest extends Model
         'date', 'start_time', 'end_time', 'reason', 'status'
     ];
 
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
+
     // 1. Relasi ke Eskul Peminjam
     public function organization()
     {

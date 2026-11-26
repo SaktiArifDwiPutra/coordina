@@ -58,7 +58,24 @@ export const useAuthStore = defineStore('auth', {
         throw error
       }
     },
-    logout() {
+    async logout() {
+      const config = useRuntimeConfig()
+      const currentToken = this.token || (process.client ? localStorage.getItem('auth_token') : null)
+
+      if (currentToken) {
+        try {
+          await $fetch(`${config.public.apiUrl}/api/logout`, {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json',
+              'Authorization': `Bearer ${currentToken}`
+            }
+          })
+        } catch {
+          // Proceed with client-side cleanup even if server token is already invalid
+        }
+      }
+
       this.user = null
       this.token = null
       if (process.client) {

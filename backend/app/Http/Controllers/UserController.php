@@ -2,76 +2,70 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\ResetUserPasswordRequest;
+use App\Http\Requests\StoreEskulUserRequest;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 
 class UserController extends Controller
 {
-    // 1. Ambil daftar akun (Khusus Eskul)
     public function index(Request $request)
     {
-        // Pastikan hanya admin_mpk yang bisa akses
         if ($request->user()->role !== 'admin_mpk') {
             return response()->json(['message' => 'Akses ditolak'], 403);
         }
 
-        $users = User::where('role', 'user')->orderBy('created_at', 'desc')->get();
-        
+        $users = User::where('role', 'owner_eskul')
+            ->with('organization:id,name')
+            ->orderBy('created_at', 'desc')
+            ->get();
+
         return response()->json(['data' => $users]);
     }
 
-    // 2. Buat akun Eskul baru
-    public function store(Request $request)
+    public function store(StoreEskulUserRequest $request)
     {
-        if ($request->user()->role !== 'admin_mpk') {
-            return response()->json(['message' => 'Akses ditolak'], 403);
-        }
-
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'email' => 'required|string|email|max:255|unique:users',
-            'password' => 'required|string|min:6',
-            'organization_id' => 'required|integer|exists:organizations,id',
-        ]);
+        $validated = $request->validated();
 
         $user = User::create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'password' => Hash::make($request->password),
-            'role' => 'user',
-            'organization_id' => $request->organization_id, 
+            'name' => $validated['name'],
+            'email' => $validated['email'],
+            'password' => Hash::make($validated['password']),
+            'role' => 'owner_eskul',
+            'organization_id' => $validated['organization_id'],
         ]);
 
         return response()->json([
-            'status' => 'success', 
-            'message' => 'Akun Eskul ' . $user->name . ' berhasil dibuat!'
-        ]);
+            'status' => 'success',
+            'message' => 'Akun Eskul ' . $user->name . ' berhasil dibuat!',
+            'data' => $user->load('organization:id,name'),
+        ], 201);
     }
 
-    // 3. Reset Password
-    public function resetPassword(Request $request, $id)
+    public function resetPassword(ResetUserPasswordRequest $request, $id)
     {
-        if ($request->user()->role !== 'admin_mpk') {
-            return response()->json(['message' => 'Akses ditolak'], 403);
+        $user = User::findOrFail($id);
+
+        if ($user->role !== 'owner_eskul') {
+            return response()->json([
+                'message' => 'Aksi ditolak. Hanya akun eskul yang boleh direset melalui endpoint ini.',
+            ], 403);
         }
 
-        $request->validate([
-            'password' => 'required|string|min:6',
+        $user->update([
+            'password' => Hash::make($request->validated('password')),
         ]);
 
-        $user = User::findOrFail($id);
-        $user->update([
-            'password' => Hash::make($request->password)
-        ]);
+        // Revoke active Sanctum tokens after password reset
+        $user->tokens()->delete();
 
         return response()->json([
-            'status' => 'success', 
-            'message' => 'Password untuk ' . $user->name . ' berhasil direset!'
+            'status' => 'success',
+            'message' => 'Password untuk ' . $user->name . ' berhasil direset!',
         ]);
     }
 
-    // 4. Hapus Akun
     public function destroy(Request $request, $id)
     {
         if ($request->user()->role !== 'admin_mpk') {
@@ -79,18 +73,20 @@ class UserController extends Controller
         }
 
         $user = User::findOrFail($id);
-        
-        // Pastikan MPK tidak bisa menghapus akun MPK lain (keamanan)
-        if ($user->role !== 'user') {
-            return response()->json(['message' => 'Aksi ditolak. Hanya akun eskul yang boleh dihapus.'], 403);
+
+        if ($user->role !== 'owner_eskul') {
+            return response()->json([
+                'message' => 'Aksi ditolak. Hanya akun eskul yang boleh dihapus.',
+            ], 403);
         }
 
         $nama = $user->name;
+        $user->tokens()->delete();
         $user->delete();
 
         return response()->json([
-            'status' => 'success', 
-            'message' => 'Akun ' . $nama . ' berhasil dihapus permanen!'
+            'status' => 'success',
+            'message' => 'Akun ' . $nama . ' berhasil dihapus permanen!',
         ]);
     }
 }
