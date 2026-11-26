@@ -16,9 +16,10 @@ class StoreEskulUserRequest extends FormRequest
         return [
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'string', 'email', 'max:255', 'unique:users'],
-            'password' => ['required', 'string', 'min:6'],
+            'password' => ['nullable', 'string', 'min:6'],
+            'generate_password' => ['nullable', 'boolean'],
+            'must_change_password' => ['nullable', 'boolean'],
             'organization_id' => ['required', 'integer', 'exists:organizations,id'],
         ];
     }
 }
-

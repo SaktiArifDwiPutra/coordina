@@ -725,4 +725,78 @@ class Phase4PdfVerificationAndArchiveTest extends TestCase
             'status' => BorrowRequest::STATUS_APPROVED,
         ]);
     }
+
+    public function test_database_seeder_sets_is_mpk_flag_and_supports_mpk_free_slot_signing(): void
+    {
+        // Clear setUp data so DatabaseSeeder runs on clean tables
+        BorrowRequest::query()->delete();
+        FixedSchedule::query()->delete();
+        User::query()->delete();
+        Organization::query()->delete();
+        Facility::query()->delete();
+
+        $this->seed(\Database\Seeders\DatabaseSeeder::class);
+
+        $mpkOrg = Organization::where('name', 'MPK / OSIS')->firstOrFail();
+        $basketOrg = Organization::where('name', 'Eskul Basket')->firstOrFail();
+
+        $this->assertTrue((bool) $mpkOrg->is_mpk);
+        $this->assertFalse((bool) $basketOrg->is_mpk);
+
+        $seededMpkUser = User::where('email', 'admin@mpk.com')->firstOrFail();
+        $this->assertSame($mpkOrg->id, $seededMpkUser->organization_id);
+
+        $this->bindFakePdfConverter(true);
+        $this->completeOrgProfile($seededMpkUser, 'Ketua Seeded MPK', 'Ketua Komisi 2 MPK', '232419999');
+
+        $facility = Facility::firstOrFail();
+        $res = $this->actingAs($seededMpkUser, 'sanctum')
+            ->postJson('/api/borrow-requests', [
+                'facility_id' => $facility->id,
+                'date' => $this->nextTuesday,
+                'start_time' => '09:00',
+                'end_time' => '10:00',
+                'reason' => 'Uji MPK free slot seeded',
+                'confirm_signature' => true,
+            ])
+            ->assertStatus(201);
+
+        $res->assertJsonPath('data.workflow_type', BorrowRequest::WORKFLOW_FREE_SLOT);
+        $res->assertJsonPath('data.status', BorrowRequest::STATUS_APPROVED);
+        $res->assertJsonPath('data.document.document_status', BorrowDocument::STATUS_FINALIZED);
+    }
+
+    public function test_workflow_specific_templates_take_precedence_over_shared_template(): void
+    {
+        // Generate shared default template v1
+        $sharedRes = $this->actingAs($this->adminMpk, 'sanctum')
+            ->postJson('/api/document-templates/generate-default')
+            ->assertStatus(201);
+        $sharedTplPath = Storage::disk('local')->path($sharedRes->json('data.file_path'));
+
+        // Upload workflow_a and workflow_b scoped templates
+        $uploadA = new UploadedFile($sharedTplPath, 'wf_a.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', null, true);
+        $resA = $this->actingAs($this->adminMpk, 'sanctum')
+            ->post('/api/document-templates', [
+                'name' => 'Template Khusus Workflow A',
+                'workflow_scope' => 'workflow_a',
+                'template' => $uploadA,
+            ], ['Accept' => 'application/json'])
+            ->assertStatus(201);
+
+        $uploadB = new UploadedFile($sharedTplPath, 'wf_b.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', null, true);
+        $resB = $this->actingAs($this->adminMpk, 'sanctum')
+            ->post('/api/document-templates', [
+                'name' => 'Template Khusus Workflow B',
+                'workflow_scope' => 'workflow_b',
+                'template' => $uploadB,
+            ], ['Accept' => 'application/json'])
+            ->assertStatus(201);
+
+        $service = app(\App\Services\DocumentGenerationService::class);
+
+        $this->assertSame((int) $resA->json('data.id'), $service->resolveActiveTemplate(BorrowRequest::WORKFLOW_INTER_ESKUL)->id);
+        $this->assertSame((int) $resB->json('data.id'), $service->resolveActiveTemplate(BorrowRequest::WORKFLOW_MPK_BORROW)->id);
+        $this->assertSame((int) $sharedRes->json('data.id'), $service->resolveActiveTemplate(BorrowRequest::WORKFLOW_FREE_SLOT)->id);
+    }
 }

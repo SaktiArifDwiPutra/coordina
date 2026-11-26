@@ -5,11 +5,15 @@ namespace App\Http\Controllers;
 use App\Http\Requests\ResetUserPasswordRequest;
 use App\Http\Requests\StoreEskulUserRequest;
 use App\Models\User;
+use App\Services\AccountLifecycleService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
 
 class UserController extends Controller
 {
+    public function __construct(
+        private readonly AccountLifecycleService $accountService
+    ) {}
+
     public function index(Request $request)
     {
         if ($request->user()->role !== 'admin_mpk') {
@@ -26,20 +30,13 @@ class UserController extends Controller
 
     public function store(StoreEskulUserRequest $request)
     {
-        $validated = $request->validated();
-
-        $user = User::create([
-            'name' => $validated['name'],
-            'email' => $validated['email'],
-            'password' => Hash::make($validated['password']),
-            'role' => 'owner_eskul',
-            'organization_id' => $validated['organization_id'],
-        ]);
+        $result = $this->accountService->createEskulAccount($request->validated());
 
         return response()->json([
             'status' => 'success',
-            'message' => 'Akun Eskul ' . $user->name . ' berhasil dibuat!',
-            'data' => $user->load('organization:id,name'),
+            'message' => 'Akun Eskul ' . $result['user']->name . ' berhasil dibuat!',
+            'data' => $result['user'],
+            'generated_password' => $result['plain_password'],
         ], 201);
     }
 
@@ -53,16 +50,37 @@ class UserController extends Controller
             ], 403);
         }
 
-        $user->update([
-            'password' => Hash::make($request->validated('password')),
-        ]);
-
-        // Revoke active Sanctum tokens after password reset
-        $user->tokens()->delete();
+        $result = $this->accountService->resetEskulPassword($user, $request->validated());
 
         return response()->json([
             'status' => 'success',
-            'message' => 'Password untuk ' . $user->name . ' berhasil direset!',
+            'message' => 'Password untuk ' . $result['user']->name . ' berhasil direset!',
+            'data' => $result['user'],
+            'generated_password' => $result['plain_password'],
+        ]);
+    }
+
+    public function toggleActive(Request $request, $id)
+    {
+        if ($request->user()->role !== 'admin_mpk') {
+            return response()->json(['message' => 'Akses ditolak'], 403);
+        }
+
+        $user = User::findOrFail($id);
+
+        if ($user->role !== 'owner_eskul') {
+            return response()->json([
+                'message' => 'Aksi ditolak. Hanya akun eskul yang dapat diubah status aktifnya.',
+            ], 403);
+        }
+
+        $updated = $this->accountService->toggleActive($user);
+        $label = $updated->is_active ? 'diaktifkan' : 'dinonaktifkan';
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "Akun {$updated->name} berhasil {$label}.",
+            'data' => $updated,
         ]);
     }
 

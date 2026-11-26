@@ -27,11 +27,13 @@ class DatabaseSeeder extends Seeder
         $basket = Organization::create([
             'name' => 'Eskul Basket',
             'advisor_name' => 'Pak Budi',
+            'is_mpk' => false,
         ]);
 
         $mpk = Organization::create([
             'name' => 'MPK / OSIS',
             'advisor_name' => 'Bu Siti',
+            'is_mpk' => true,
         ]);
 
         // 3. Buat Akun Organisasional (2 Role MVP: admin_mpk & owner_eskul)

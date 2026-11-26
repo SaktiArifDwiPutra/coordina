@@ -22,6 +22,9 @@ class User extends Authenticatable
         'class',
         'role',
         'organization_id',
+        'must_change_password',
+        'password_changed_at',
+        'is_active',
     ];
 
     protected $hidden = [
@@ -34,6 +37,9 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'must_change_password' => 'boolean',
+            'password_changed_at' => 'datetime',
+            'is_active' => 'boolean',
         ];
     }
 

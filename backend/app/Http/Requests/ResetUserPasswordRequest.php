@@ -14,8 +14,9 @@ class ResetUserPasswordRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'password' => ['required', 'string', 'min:6'],
+            'password' => ['nullable', 'string', 'min:6'],
+            'generate_password' => ['nullable', 'boolean'],
+            'must_change_password' => ['nullable', 'boolean'],
         ];
     }
 }
-

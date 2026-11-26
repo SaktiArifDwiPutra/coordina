@@ -17,9 +17,16 @@ defineProps({
 const emit = defineEmits(['upload-template', 'generate-default', 'download-template'])
 
 const name = ref('Master Surat Perizinan MPK SMKN 4')
+const workflowScope = ref('shared')
 const file = ref(null)
 const templateInputRef = ref(null)
 const fileError = ref('')
+
+function scopeLabel(scope) {
+  if (scope === 'workflow_a') return 'Workflow A (3 TTD)'
+  if (scope === 'workflow_b') return 'Workflow B (2 TTD)'
+  return 'Semua Alur (Shared)'
+}
 
 function onFileSelected(event) {
   fileError.value = ''
@@ -38,10 +45,11 @@ function submitUpload() {
   fileError.value = ''
   const fd = new FormData()
   fd.append('name', name.value)
-  fd.append('workflow_scope', 'shared')
+  fd.append('workflow_scope', workflowScope.value)
   fd.append('template', file.value)
   emit('upload-template', fd, () => {
     file.value = null
+    workflowScope.value = 'shared'
     if (templateInputRef.value) templateInputRef.value.value = ''
   })
 }
@@ -66,6 +74,17 @@ function submitUpload() {
           <div class="space-y-2">
             <Label>Nama Template</Label>
             <Input v-model="name" required />
+          </div>
+          <div class="space-y-2">
+            <Label>Cakupan Alur Surat</Label>
+            <select
+              v-model="workflowScope"
+              class="flex h-10 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm"
+            >
+              <option value="shared">Semua Alur (Shared — Workflow A, B &amp; Slot Kosong)</option>
+              <option value="workflow_a">Khusus Workflow A (Antar-Ekskul 3 TTD)</option>
+              <option value="workflow_b">Khusus Workflow B (MPK Meminjam 2 TTD)</option>
+            </select>
           </div>
           <div class="space-y-2">
             <Label>File DOCX (Maks 5MB)</Label>
@@ -99,14 +118,19 @@ function submitUpload() {
               <p class="text-sm font-semibold text-zinc-900">
                 {{ tpl.name }} <span class="text-xs text-zinc-500">(v{{ tpl.version }})</span>
               </p>
-              <span
-                :class="[
-                  'text-[11px] px-2 py-0.5 rounded font-medium inline-block mt-1',
-                  tpl.is_active ? 'bg-green-100 text-green-800' : 'bg-zinc-100 text-zinc-600',
-                ]"
-              >
-                {{ tpl.is_active ? 'Aktif' : 'Arsip Lama' }}
-              </span>
+              <div class="flex flex-wrap items-center gap-1.5 mt-1">
+                <span
+                  :class="[
+                    'text-[11px] px-2 py-0.5 rounded font-medium inline-block',
+                    tpl.is_active ? 'bg-green-100 text-green-800' : 'bg-zinc-100 text-zinc-600',
+                  ]"
+                >
+                  {{ tpl.is_active ? 'Aktif' : 'Arsip Lama' }}
+                </span>
+                <span class="text-[11px] px-2 py-0.5 rounded font-medium bg-indigo-50 text-indigo-700 inline-block">
+                  {{ scopeLabel(tpl.workflow_scope) }}
+                </span>
+              </div>
             </div>
             <Button size="sm" variant="outline" @click="emit('download-template', tpl)">Unduh DOCX</Button>
           </div>

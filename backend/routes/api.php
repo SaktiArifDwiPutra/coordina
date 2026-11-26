@@ -26,10 +26,13 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // auth
     Route::post('/logout', [AuthController::class, 'logout']);
+    Route::post('/change-password', [AuthController::class, 'changePassword']);
 
     Route::get('/user', function (Request $request) {
         return $request->user()->load('organization:id,name,is_mpk,chairperson_name,chairperson_title');
     });
+
+    Route::middleware(\App\Http\Middleware\EnsureAccountReady::class)->group(function () {
 
     // organization profile & private branding/signature assets
     Route::get('/organization/profile', [OrganizationProfileController::class, 'show']);
@@ -70,6 +73,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/users', [UserController::class, 'index']);
     Route::post('/users', [UserController::class, 'store']);
     Route::patch('/users/{id}/reset-password', [UserController::class, 'resetPassword']);
+    Route::patch('/users/{id}/toggle-active', [UserController::class, 'toggleActive']);
     Route::delete('/users/{id}', [UserController::class, 'destroy']);
 
     // fixed schedules
@@ -85,6 +89,8 @@ Route::middleware('auth:sanctum')->group(function () {
         return response()->json([
             'data' => Organization::all(),
         ]);
+    });
+
     });
 
 });

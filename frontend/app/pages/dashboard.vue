@@ -1,5 +1,10 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+definePageMeta({
+  middleware: ['auth', 'role'],
+  roles: ['admin_mpk', 'owner_eskul'],
+})
+
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from '~/stores/auth'
 import { useApi } from '~/composables/useApi'
 import { Label } from '~/components/ui/label'
@@ -42,6 +47,7 @@ const regeneratingDocumentId = ref(null)
 const screeningId = ref(null)
 const finalizingId = ref(null)
 const signingId = ref(null)
+const togglingUserId = ref(null)
 
 const isSubmittingRequest = ref(false)
 const isCreatingFacility = ref(false)
@@ -53,7 +59,32 @@ const isUploadingTemplate = ref(false)
 const isGeneratingDefaultTemplate = ref(false)
 
 const alertModal = ref({ isOpen: false, title: '', message: '', type: 'info' })
-const passwordModal = ref({ isOpen: false, userId: null, userName: '', newPassword: '', isSubmitting: false })
+const passwordModal = ref({
+  isOpen: false,
+  userId: null,
+  userName: '',
+  userEmail: '',
+  newPassword: '',
+  mustChangePassword: true,
+  isSubmitting: false,
+})
+const handoverModal = ref({
+  isOpen: false,
+  title: '',
+  userName: '',
+  email: '',
+  password: '',
+  copied: false,
+})
+const changePasswordModal = ref({
+  isOpen: false,
+  forced: false,
+  current_password: '',
+  new_password: '',
+  new_password_confirmation: '',
+  error: '',
+  isSubmitting: false,
+})
 const deleteModal = ref({ isOpen: false, userId: null, userName: '', isSubmitting: false })
 const decisionModal = ref({
   isOpen: false,
@@ -531,8 +562,19 @@ async function handleCreateUser(payload, resetForm) {
   isCreatingUser.value = true
   try {
     const res = await apiFetch('/api/users', { method: 'POST', body: payload })
-    showAlert('Berhasil!', res.message, 'success')
     resetForm()
+    if (res.generated_password) {
+      handoverModal.value = {
+        isOpen: true,
+        title: 'Kredensial Akun Eskul Siap Serah Terima',
+        userName: res.data?.name || payload.name,
+        email: res.data?.email || payload.email,
+        password: res.generated_password,
+        copied: false,
+      }
+    } else {
+      showAlert('Berhasil!', res.message, 'success')
+    }
     await refreshAllData(true)
   } catch (error) {
     showAlert('Gagal!', extractErrorMessage(error, 'Gagal membuat akun.'), 'error')
@@ -541,15 +583,134 @@ async function handleCreateUser(payload, resetForm) {
   }
 }
 
+function generateModalTempPassword() {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
+  const lower = 'abcdefghijkmnopqrstuvwxyz'
+  const digits = '23456789'
+  const symbols = '!@#$%&*?'
+  const all = upper + lower + digits + symbols
+  const pick = (pool) => pool[Math.floor(Math.random() * pool.length)]
+  const chars = [pick(upper), pick(lower), pick(digits), pick(symbols)]
+  while (chars.length < 12) chars.push(pick(all))
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[chars[i], chars[j]] = [chars[j], chars[i]]
+  }
+  passwordModal.value.newPassword = chars.join('')
+}
+
+async function copyHandoverCredentials() {
+  const { email, password } = handoverModal.value
+  const text = `Email: ${email}\nPassword Sementara: ${password}`
+  try {
+    await navigator.clipboard.writeText(text)
+    handoverModal.value.copied = true
+  } catch {
+    showAlert('Salin Manual', text, 'info')
+  }
+}
+
+async function handleToggleUserActive(userId) {
+  togglingUserId.value = userId
+  try {
+    const res = await apiFetch(`/api/users/${userId}/toggle-active`, { method: 'PATCH' })
+    showAlert('Berhasil!', res.message, 'success')
+    await refreshAllData(true)
+  } catch (error) {
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mengubah status akun.'), 'error')
+  } finally {
+    togglingUserId.value = null
+  }
+}
+
+function openVoluntaryChangePassword() {
+  changePasswordModal.value = {
+    isOpen: true,
+    forced: false,
+    current_password: '',
+    new_password: '',
+    new_password_confirmation: '',
+    error: '',
+    isSubmitting: false,
+  }
+}
+
+async function submitChangePassword() {
+  const m = changePasswordModal.value
+  m.error = ''
+  if (!m.current_password || !m.new_password || m.new_password !== m.new_password_confirmation) {
+    m.error = 'Pastikan password saat ini diisi dan konfirmasi password baru cocok.'
+    return
+  }
+
+  m.isSubmitting = true
+  try {
+    const res = await apiFetch('/api/change-password', {
+      method: 'POST',
+      body: {
+        current_password: m.current_password,
+        new_password: m.new_password,
+        new_password_confirmation: m.new_password_confirmation,
+      },
+    })
+    auth.user = res.user
+    m.isOpen = false
+    m.forced = false
+    showAlert('Berhasil!', res.message, 'success')
+    await refreshAllData(false)
+  } catch (error) {
+    m.error = extractErrorMessage(error, 'Gagal mengganti password.')
+  } finally {
+    m.isSubmitting = false
+  }
+}
+
+watch(
+  () => auth.user?.must_change_password,
+  (mustChange) => {
+    if (mustChange) {
+      changePasswordModal.value = {
+        isOpen: true,
+        forced: true,
+        current_password: '',
+        new_password: '',
+        new_password_confirmation: '',
+        error: '',
+        isSubmitting: false,
+      }
+    }
+  },
+  { immediate: true }
+)
+
 async function submitPasswordReset() {
   passwordModal.value.isSubmitting = true
   try {
+    const trimmed = passwordModal.value.newPassword.trim()
     const res = await apiFetch(`/api/users/${passwordModal.value.userId}/reset-password`, {
       method: 'PATCH',
-      body: { password: passwordModal.value.newPassword },
+      body: {
+        password: trimmed || null,
+        generate_password: !trimmed,
+        must_change_password: Boolean(passwordModal.value.mustChangePassword),
+      },
     })
+    const targetName = passwordModal.value.userName
+    const targetEmail = passwordModal.value.userEmail
     passwordModal.value.isOpen = false
-    showAlert('Berhasil!', res.message, 'success')
+    if (res.generated_password) {
+      handoverModal.value = {
+        isOpen: true,
+        title: 'Password Sementara Baru Siap Serah Terima',
+        userName: targetName,
+        email: targetEmail || res.data?.email || '',
+        password: res.generated_password,
+        copied: false,
+      }
+    } else {
+      showAlert('Berhasil!', res.message, 'success')
+    }
+    await refreshAllData(true)
   } catch (error) {
     showAlert('Gagal!', extractErrorMessage(error, 'Gagal mereset password.'), 'error')
   } finally {
@@ -584,6 +745,13 @@ onMounted(async () => {
   pageLoading.value = true
   if (!auth.user) await auth.fetchUser()
   if (!auth.token || !auth.user) return navigateTo('/login')
+
+  if (auth.user.must_change_password) {
+    changePasswordModal.value.isOpen = true
+    changePasswordModal.value.forced = true
+    pageLoading.value = false
+    return
+  }
 
   if (isMpk.value) {
     fetchOrganizations()
@@ -630,10 +798,80 @@ onUnmounted(() => {
       <div class="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4">
         <h3 class="text-lg font-bold text-zinc-900">Reset Password</h3>
         <p class="text-sm text-zinc-500">Akun: <span class="font-semibold text-zinc-900">{{ passwordModal.userName }}</span></p>
-        <div class="space-y-2 pt-2"><Label>Password Baru</Label><Input type="password" v-model="passwordModal.newPassword" placeholder="Minimal 6 karakter..." /></div>
+        <div class="space-y-2 pt-2">
+          <div class="flex items-center justify-between gap-2">
+            <Label>Password Baru</Label>
+            <button type="button" class="text-xs font-semibold text-indigo-600 hover:underline" @click="generateModalTempPassword">
+              Generate Acak
+            </button>
+          </div>
+          <Input type="text" v-model="passwordModal.newPassword" placeholder="Kosongkan untuk generate otomatis" />
+        </div>
+        <label class="flex items-center gap-2 text-xs text-zinc-700 cursor-pointer">
+          <input v-model="passwordModal.mustChangePassword" type="checkbox" class="rounded border-zinc-300" />
+          Wajibkan ganti password saat login berikutnya
+        </label>
         <div class="flex justify-end gap-2 pt-4">
           <Button variant="outline" @click="passwordModal.isOpen = false">Batal</Button>
-          <Button @click="submitPasswordReset" :disabled="passwordModal.isSubmitting" class="bg-indigo-600 text-white">Simpan</Button>
+          <Button @click="submitPasswordReset" :disabled="passwordModal.isSubmitting" class="bg-indigo-600 text-white">
+            {{ passwordModal.isSubmitting ? 'Menyimpan...' : 'Simpan & Cabut Sesi' }}
+          </Button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="handoverModal.isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4">
+        <h3 class="text-lg font-bold text-zinc-900">{{ handoverModal.title }}</h3>
+        <p class="text-xs text-zinc-500">
+          Salin dan serahkan kredensial ini secara aman kepada pengurus baru organisasi <strong>{{ handoverModal.userName }}</strong>.
+        </p>
+        <div class="rounded-xl bg-zinc-50 border border-zinc-200 p-4 space-y-2 text-sm font-mono">
+          <div><span class="text-zinc-500">Email:</span> {{ handoverModal.email }}</div>
+          <div><span class="text-zinc-500">Password:</span> <strong>{{ handoverModal.password }}</strong></div>
+        </div>
+        <div class="flex justify-end gap-2 pt-2">
+          <Button variant="outline" @click="copyHandoverCredentials">
+            {{ handoverModal.copied ? 'Tersalin!' : 'Salin Kredensial' }}
+          </Button>
+          <Button class="bg-zinc-900 text-white" @click="handoverModal.isOpen = false">Selesai</Button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="changePasswordModal.isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4">
+        <h3 class="text-lg font-bold text-zinc-900">
+          {{ changePasswordModal.forced ? 'Wajib Ganti Password Sementara' : 'Ganti Password Akun' }}
+        </h3>
+        <p class="text-xs text-zinc-500">
+          {{
+            changePasswordModal.forced
+              ? 'Untuk keamanan serah terima organisasi, Anda wajib mengganti password sementara sebelum mengakses dashboard.'
+              : 'Perbarui password akun Anda secara berkala.'
+          }}
+        </p>
+        <div class="space-y-3">
+          <div class="space-y-1">
+            <Label>Password Saat Ini</Label>
+            <Input v-model="changePasswordModal.current_password" type="password" placeholder="Masukkan password saat ini" />
+          </div>
+          <div class="space-y-1">
+            <Label>Password Baru (Minimal 8 Karakter)</Label>
+            <Input v-model="changePasswordModal.new_password" type="password" placeholder="Password baru..." />
+          </div>
+          <div class="space-y-1">
+            <Label>Konfirmasi Password Baru</Label>
+            <Input v-model="changePasswordModal.new_password_confirmation" type="password" placeholder="Ulangi password baru..." />
+          </div>
+          <p v-if="changePasswordModal.error" class="text-xs text-red-600 font-medium">{{ changePasswordModal.error }}</p>
+        </div>
+        <div class="flex justify-end gap-2 pt-2">
+          <Button v-if="!changePasswordModal.forced" variant="outline" @click="changePasswordModal.isOpen = false">Batal</Button>
+          <Button v-else variant="outline" class="text-red-600 border-red-200" @click="auth.logout()">Keluar</Button>
+          <Button :disabled="changePasswordModal.isSubmitting" class="bg-indigo-600 text-white" @click="submitChangePassword">
+            {{ changePasswordModal.isSubmitting ? 'Menyimpan...' : 'Simpan Password Baru' }}
+          </Button>
         </div>
       </div>
     </div>
@@ -763,6 +1001,12 @@ onUnmounted(() => {
             :unread-count="unreadCount"
             @mark-read="handleMarkNotificationRead"
           />
+          <button
+            @click="openVoluntaryChangePassword"
+            class="px-3 py-2 bg-zinc-100 text-zinc-700 hover:bg-zinc-200 font-medium rounded-lg transition-colors text-sm"
+          >
+            Ganti Password
+          </button>
           <button
             @click="auth.logout()"
             class="px-4 py-2 bg-red-50 text-red-600 hover:bg-red-100 font-medium rounded-lg transition-colors text-sm"
@@ -907,10 +1151,12 @@ onUnmounted(() => {
           :creating-facility="isCreatingFacility"
           :creating-schedule="isCreatingSchedule"
           :creating-user="isCreatingUser"
+          :toggling-user-id="togglingUserId"
           @create-facility="handleCreateFacility"
           @create-schedule="handleCreateSchedule"
           @create-user="handleCreateUser"
-          @reset-password="(id, name) => (passwordModal = { isOpen: true, userId: id, userName: name, newPassword: '', isSubmitting: false })"
+          @reset-password="(id, name, email) => (passwordModal = { isOpen: true, userId: id, userName: name, userEmail: email || '', newPassword: '', mustChangePassword: true, isSubmitting: false })"
+          @toggle-active="handleToggleUserActive"
           @delete-user="(id, name) => (deleteModal = { isOpen: true, userId: id, userName: name, isSubmitting: false })"
         />
       </div>

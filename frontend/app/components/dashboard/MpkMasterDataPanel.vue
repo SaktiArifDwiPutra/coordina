@@ -13,6 +13,7 @@ defineProps({
   creatingFacility: { type: Boolean, default: false },
   creatingSchedule: { type: Boolean, default: false },
   creatingUser: { type: Boolean, default: false },
+  togglingUserId: { type: Number, default: null },
 })
 
 const emit = defineEmits([
@@ -20,12 +21,37 @@ const emit = defineEmits([
   'create-schedule',
   'create-user',
   'reset-password',
+  'toggle-active',
   'delete-user',
 ])
 
 const facilityForm = ref({ name: '', type: '', description: '' })
 const scheduleForm = ref({ facility_id: '', organization_id: '', day: 'Monday', start_time: '', end_time: '' })
-const newUserForm = ref({ name: '', email: '', password: '', organization_id: '' })
+const newUserForm = ref({
+  name: '',
+  email: '',
+  password: '',
+  generate_password: false,
+  must_change_password: true,
+  organization_id: '',
+})
+
+function generateClientTempPassword() {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
+  const lower = 'abcdefghijkmnopqrstuvwxyz'
+  const digits = '23456789'
+  const symbols = '!@#$%&*?'
+  const all = upper + lower + digits + symbols
+  const pick = (pool) => pool[Math.floor(Math.random() * pool.length)]
+  const chars = [pick(upper), pick(lower), pick(digits), pick(symbols)]
+  while (chars.length < 12) chars.push(pick(all))
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[chars[i], chars[j]] = [chars[j], chars[i]]
+  }
+  newUserForm.value.password = chars.join('')
+  newUserForm.value.generate_password = false
+}
 
 function submitFacility() {
   emit('create-facility', { ...facilityForm.value }, () => {
@@ -40,8 +66,19 @@ function submitSchedule() {
 }
 
 function submitUser() {
-  emit('create-user', { ...newUserForm.value }, () => {
-    newUserForm.value = { name: '', email: '', password: '', organization_id: '' }
+  const payload = {
+    ...newUserForm.value,
+    generate_password: !newUserForm.value.password.trim(),
+  }
+  emit('create-user', payload, () => {
+    newUserForm.value = {
+      name: '',
+      email: '',
+      password: '',
+      generate_password: false,
+      must_change_password: true,
+      organization_id: '',
+    }
   })
 }
 </script>
@@ -115,21 +152,41 @@ function submitUser() {
             </div>
             <div class="space-y-2"><Label for="new_name">Nama Tampilan Akun</Label><Input id="new_name" v-model="newUserForm.name" type="text" placeholder="Contoh: Official Basket" required /></div>
             <div class="space-y-2"><Label for="new_email">Email Dinas</Label><Input id="new_email" v-model="newUserForm.email" type="email" placeholder="Contoh: basket@coordina.com" required /></div>
-            <div class="space-y-2"><Label for="new_password">Password Awal</Label><Input id="new_password" v-model="newUserForm.password" type="password" minlength="6" placeholder="Minimal 6 karakter" required /></div>
-            <Button :disabled="creatingUser" type="submit" class="w-full bg-zinc-900 text-white">Buat Akun</Button>
+            <div class="space-y-2">
+              <div class="flex items-center justify-between gap-2">
+                <Label for="new_password">Password Sementara</Label>
+                <button type="button" class="text-xs font-semibold text-indigo-600 hover:underline" @click="generateClientTempPassword">
+                  Generate Acak
+                </button>
+              </div>
+              <Input
+                id="new_password"
+                v-model="newUserForm.password"
+                type="text"
+                minlength="6"
+                placeholder="Kosongkan untuk generate otomatis"
+              />
+            </div>
+            <label class="flex items-center gap-2 text-xs text-zinc-700 cursor-pointer">
+              <input v-model="newUserForm.must_change_password" type="checkbox" class="rounded border-zinc-300" />
+              Wajibkan ganti password saat login pertama
+            </label>
+            <Button :disabled="creatingUser" type="submit" class="w-full bg-zinc-900 text-white">
+              {{ creatingUser ? 'Membuat Akun...' : 'Buat Akun & Tampilkan Kredensial' }}
+            </Button>
           </form>
         </Card>
       </div>
 
       <div class="lg:col-span-2">
-        <h2 class="text-xl font-bold text-zinc-900 mb-4">Daftar Akun Eskul Aktif</h2>
-        <Card class="border-zinc-200 shadow-sm p-0 overflow-hidden">
+        <h2 class="text-xl font-bold text-zinc-900 mb-4">Daftar Akun Eskul</h2>
+        <Card class="border-zinc-200 shadow-sm p-0 overflow-x-auto">
           <div v-if="loadingUsers" class="p-6 text-zinc-500">Memuat data akun...</div>
           <table v-else class="w-full text-sm text-left">
             <thead class="bg-zinc-50 border-b border-zinc-200 text-zinc-600 uppercase text-xs">
               <tr>
                 <th class="px-6 py-4 font-semibold">Nama / Organisasi</th>
-                <th class="px-6 py-4 font-semibold">Email Login</th>
+                <th class="px-6 py-4 font-semibold">Status Akun</th>
                 <th class="px-6 py-4 font-semibold text-right">Aksi Keamanan</th>
               </tr>
             </thead>
@@ -138,10 +195,34 @@ function submitUser() {
                 <td class="px-6 py-4 font-medium text-zinc-900">
                   {{ user.name }}
                   <span v-if="user.organization?.name" class="block text-xs text-zinc-500 font-normal">{{ user.organization.name }}</span>
+                  <span class="block text-xs text-zinc-400 font-normal">{{ user.email }}</span>
                 </td>
-                <td class="px-6 py-4 text-zinc-600">{{ user.email }}</td>
-                <td class="px-6 py-4 text-right space-x-2">
-                  <Button @click="emit('reset-password', user.id, user.name)" variant="outline" size="sm">Reset Password</Button>
+                <td class="px-6 py-4 space-y-1">
+                  <span
+                    :class="[
+                      'inline-block text-xs px-2 py-0.5 rounded font-medium',
+                      user.is_active !== false ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700',
+                    ]"
+                  >
+                    {{ user.is_active !== false ? 'Aktif' : 'Nonaktif' }}
+                  </span>
+                  <span
+                    v-if="user.must_change_password"
+                    class="block text-[11px] px-2 py-0.5 rounded bg-amber-50 text-amber-800 font-medium w-fit"
+                  >
+                    Wajib Ganti Password
+                  </span>
+                </td>
+                <td class="px-6 py-4 text-right space-x-2 whitespace-nowrap">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    :disabled="togglingUserId === user.id"
+                    @click="emit('toggle-active', user.id)"
+                  >
+                    {{ togglingUserId === user.id ? 'Memproses...' : user.is_active !== false ? 'Nonaktifkan' : 'Aktifkan' }}
+                  </Button>
+                  <Button @click="emit('reset-password', user.id, user.name, user.email)" variant="outline" size="sm">Reset Password</Button>
                   <Button @click="emit('delete-user', user.id, user.name)" variant="outline" size="sm" class="border-red-200 text-red-600 hover:bg-red-50">Hapus</Button>
                 </td>
               </tr>
@@ -155,4 +236,3 @@ function submitUser() {
     </div>
   </div>
 </template>
-
