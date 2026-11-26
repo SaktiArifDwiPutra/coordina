@@ -8,10 +8,15 @@ RUN apt-get update && apt-get install -y \
     zip \
     curl \
     libpq-dev \
+    libzip-dev \
+    libreoffice-writer \
+    fonts-liberation \
+    fonts-dejavu \
     nodejs \
-    npm
+    npm \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN docker-php-ext-install pdo pdo_pgsql
+RUN docker-php-ext-install pdo pdo_pgsql zip
 
 COPY . .
 

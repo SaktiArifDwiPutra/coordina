@@ -86,11 +86,27 @@ class SignatureService
         });
     }
 
+    public function requiredStagesFor(BorrowRequest $borrowRequest): array
+    {
+        if ($borrowRequest->workflow_type === BorrowRequest::WORKFLOW_MPK_BORROW) {
+            return [1, 2];
+        }
+
+        if ($borrowRequest->workflow_type === BorrowRequest::WORKFLOW_FREE_SLOT) {
+            $borrowRequest->loadMissing('organization:id,is_mpk');
+            if ($borrowRequest->organization?->is_mpk) {
+                return [1];
+            }
+
+            return [1, 2];
+        }
+
+        return [1, 2, 3];
+    }
+
     public function hasAllRequiredSignatures(BorrowRequest $borrowRequest, BorrowDocument $document): bool
     {
-        $requiredStages = $borrowRequest->workflow_type === BorrowRequest::WORKFLOW_MPK_BORROW
-            ? [1, 2]
-            : ($borrowRequest->workflow_type === BorrowRequest::WORKFLOW_FREE_SLOT ? [1, 2] : [1, 2, 3]);
+        $requiredStages = $this->requiredStagesFor($borrowRequest);
 
         $signatures = DocumentSignature::query()
             ->where('borrow_document_id', $document->id)

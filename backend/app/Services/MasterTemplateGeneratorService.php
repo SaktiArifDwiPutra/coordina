@@ -24,9 +24,10 @@ class MasterTemplateGeneratorService
         'mpk_chair_name',
         'mpk_chair_id',
         'right_chair_title',
+        'right_school_line',
         'right_signature',
-        'right_chair_name',
-        'right_chair_id',
+        'right_chair_name_line',
+        'right_chair_id_line',
         'bottom_chair_title',
         'bottom_school_line',
         'bottom_signature',
@@ -109,10 +110,10 @@ class MasterTemplateGeneratorService
 
         $rightSig = $sigTable->addCell(4800);
         $rightSig->addText('${right_chair_title}', [], ['alignment' => Jc::CENTER, 'spaceAfter' => 0]);
-        $rightSig->addText('SMK Negeri 4 Padalarang', [], ['alignment' => Jc::CENTER, 'spaceAfter' => 80]);
+        $rightSig->addText('${right_school_line}', [], ['alignment' => Jc::CENTER, 'spaceAfter' => 80]);
         $rightSig->addText('${right_signature}', ['size' => 9], ['alignment' => Jc::CENTER, 'spaceAfter' => 80]);
-        $rightSig->addText('(${right_chair_name})', ['underline' => 'single'], ['alignment' => Jc::CENTER, 'spaceAfter' => 0]);
-        $rightSig->addText('NIS. ${right_chair_id}', [], ['alignment' => Jc::CENTER, 'spaceAfter' => 0]);
+        $rightSig->addText('${right_chair_name_line}', ['underline' => 'single'], ['alignment' => Jc::CENTER, 'spaceAfter' => 0]);
+        $rightSig->addText('${right_chair_id_line}', [], ['alignment' => Jc::CENTER, 'spaceAfter' => 0]);
 
         // Bottom signature block (used for Workflow A Receiving Owner; empty strings for Workflow B)
         $section->addTextBreak(1);

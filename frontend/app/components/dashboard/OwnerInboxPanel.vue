@@ -5,9 +5,10 @@ import { Button } from '~/components/ui/button'
 defineProps({
   requests: { type: Array, default: () => [] },
   profileComplete: { type: Boolean, default: false },
+  signingId: { type: Number, default: null },
 })
 
-const emit = defineEmits(['approve', 'reject'])
+const emit = defineEmits(['approve', 'reject', 'sign'])
 
 function scrollToProfile() {
   document.getElementById('organization-profile')?.scrollIntoView({ behavior: 'smooth' })
@@ -54,11 +55,21 @@ function scrollToProfile() {
             </p>
             <p class="text-sm text-zinc-700 mt-1">📝 Alasan: "{{ req.reason }}"</p>
           </div>
-          <div class="flex gap-2 shrink-0">
-            <Button :disabled="!profileComplete" @click="emit('approve', req)" class="bg-green-600 hover:bg-green-700 text-white">
-              Izinkan & TTD
+          <div class="flex flex-wrap gap-2 shrink-0">
+            <template v-if="req.status === 'pending_owner'">
+              <Button :disabled="!profileComplete || signingId === req.id" @click="emit('approve', req)" class="bg-green-600 hover:bg-green-700 text-white">
+                Izinkan & TTD
+              </Button>
+              <Button @click="emit('reject', req)" variant="outline" class="text-red-600 border-red-200 hover:bg-red-50">Tolak</Button>
+            </template>
+            <Button
+              v-else-if="req.status === 'owner_approved' && req.document?.document_status === 'waiting_owner_signature'"
+              :disabled="!profileComplete || signingId === req.id"
+              @click="emit('sign', req)"
+              class="bg-indigo-600 hover:bg-indigo-700 text-white"
+            >
+              {{ signingId === req.id ? 'Menyimpan...' : 'Bubuhkan TTD Pemilik' }}
             </Button>
-            <Button @click="emit('reject', req)" variant="outline" class="text-red-600 border-red-200 hover:bg-red-50">Tolak</Button>
           </div>
         </div>
       </Card>

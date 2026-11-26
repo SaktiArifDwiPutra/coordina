@@ -6,9 +6,13 @@ import { Button } from '~/components/ui/button'
 const props = defineProps({
   requests: { type: Array, default: () => [] },
   profileComplete: { type: Boolean, default: false },
+  screeningId: { type: Number, default: null },
+  finalizingId: { type: Number, default: null },
+  signingId: { type: Number, default: null },
+  regeneratingId: { type: Number, default: null },
 })
 
-const emit = defineEmits(['screen-accept', 'screen-reject', 'finalize'])
+const emit = defineEmits(['screen-accept', 'screen-reject', 'finalize', 'request-correction', 'sign', 'regenerate-pdf'])
 
 const screeningQueue = computed(() =>
   props.requests.filter((r) => r.status === 'pending_mpk_screening')
@@ -24,7 +28,11 @@ const completed = computed(() =>
 )
 
 function requiredSignaturesCount(req) {
-  return req.workflow_type === 'mpk_borrow' || req.workflow_type === 'free_slot' ? 2 : 3
+  if (req.workflow_type === 'mpk_borrow') return 2
+  if (req.workflow_type === 'free_slot') {
+    return req.organization?.is_mpk ? 1 : 2
+  }
+  return 3
 }
 
 function activeSignatureCount(req) {
@@ -32,8 +40,29 @@ function activeSignatureCount(req) {
 }
 
 function canFinalize(req) {
+  if (req.document?.document_status === 'needs_correction') return false
   if (req.status === 'owner_rejected') return true
+  if (req.document?.document_status !== 'pending_mpk_verification') return false
   return activeSignatureCount(req) >= requiredSignaturesCount(req)
+}
+
+function completedPdfStatusBadge(req) {
+  if (req.status === 'rejected') {
+    return { label: 'Ditolak', cls: 'bg-red-50 text-red-700' }
+  }
+  const docStatus = req.document?.document_status
+  if (docStatus === 'finalized' && req.document?.final_pdf_path) {
+    return { label: 'Disetujui · PDF Resmi Siap', cls: 'bg-green-50 text-green-700' }
+  }
+  if (docStatus === 'pdf_generation_failed') {
+    return { label: 'Disetujui · PDF Gagal', cls: 'bg-amber-100 text-amber-800' }
+  }
+  return { label: 'Disetujui · Memproses PDF', cls: 'bg-sky-50 text-sky-700' }
+}
+
+function latestRevisionReason(req) {
+  const revisions = req.document?.revisions || []
+  return revisions.length > 0 ? revisions[revisions.length - 1].reason : null
 }
 
 function scrollToProfile() {
@@ -88,13 +117,24 @@ function scrollToProfile() {
             </div>
             <div class="flex flex-wrap gap-2 shrink-0">
               <Button
-                :disabled="!profileComplete"
+                :disabled="!profileComplete || screeningId === req.id"
                 @click="emit('screen-accept', req)"
                 :class="req.owner_organization_id ? 'bg-blue-600 text-white' : 'bg-green-600 text-white'"
               >
-                {{ req.owner_organization_id ? 'Lolos Screening, TTD & Teruskan' : 'Setujui & TTD Slot Kosong' }}
+                {{
+                  screeningId === req.id
+                    ? 'Memproses...'
+                    : req.owner_organization_id
+                      ? 'Lolos Screening, TTD & Teruskan'
+                      : 'Setujui & TTD Slot Kosong'
+                }}
               </Button>
-              <Button @click="emit('screen-reject', req)" variant="outline" class="text-red-600 border-red-200">
+              <Button
+                :disabled="screeningId === req.id"
+                @click="emit('screen-reject', req)"
+                variant="outline"
+                class="text-red-600 border-red-200"
+              >
                 Tolak Screening
               </Button>
             </div>
@@ -119,19 +159,43 @@ function scrollToProfile() {
                 📅 {{ req.date }} | ⏰ {{ req.start_time.substring(0, 5) }} - {{ req.end_time.substring(0, 5) }} · Pemilik:
                 <strong>{{ req.owner_organization?.name }}</strong>
               </p>
-              <p v-if="req.status === 'owner_approved'" class="text-xs font-semibold text-green-700 mt-2">
+              <p v-if="req.document?.document_status === 'needs_correction'" class="text-xs font-semibold text-amber-800 bg-amber-100 border border-amber-200 rounded-md px-2.5 py-1.5 mt-2">
+                Menunggu Revisi Pemohon: "{{ latestRevisionReason(req) || 'Perlu perbaikan sesuai catatan MPK.' }}"
+              </p>
+              <p v-else-if="req.status === 'owner_approved'" class="text-xs font-semibold text-green-700 mt-2">
                 ✅ Pemilik jadwal menyetujui peminjaman ini. (TTD: {{ activeSignatureCount(req) }}/{{ requiredSignaturesCount(req) }})
               </p>
               <p v-else class="text-xs font-semibold text-red-700 mt-2">
                 ❌ Pemilik jadwal menolak: "{{ req.rejection_reason }}"
               </p>
-              <p v-if="req.status === 'owner_approved' && !canFinalize(req)" class="text-xs text-red-600 mt-1">
+              <p v-if="req.status === 'owner_approved' && req.document?.document_status !== 'needs_correction' && !canFinalize(req)" class="text-xs text-red-600 mt-1">
                 Tanda tangan wajib belum lengkap — dokumen tidak dapat difinalisasi.
               </p>
             </div>
-            <Button :disabled="!canFinalize(req)" @click="emit('finalize', req)" class="bg-zinc-900 text-white shrink-0">
-              {{ req.status === 'owner_approved' ? 'Catat Persetujuan & Perbarui Jadwal' : 'Catat & Sampaikan Penolakan' }}
-            </Button>
+            <div class="flex flex-wrap gap-2 shrink-0">
+              <Button
+                v-if="req.status === 'owner_approved' && req.document?.document_status === 'pending_mpk_verification'"
+                variant="outline"
+                class="border-amber-300 text-amber-800 hover:bg-amber-50"
+                :disabled="finalizingId === req.id"
+                @click="emit('request-correction', req)"
+              >
+                Minta Revisi
+              </Button>
+              <Button
+                :disabled="!canFinalize(req) || finalizingId === req.id"
+                @click="emit('finalize', req)"
+                class="bg-zinc-900 text-white shrink-0"
+              >
+                {{
+                  finalizingId === req.id
+                    ? 'Memproses...'
+                    : req.status === 'owner_approved'
+                      ? 'Catat Persetujuan & Terbitkan PDF'
+                      : 'Catat & Sampaikan Penolakan'
+                }}
+              </Button>
+            </div>
           </div>
         </Card>
       </div>
@@ -148,7 +212,18 @@ function scrollToProfile() {
                 <p class="text-xs text-zinc-600">{{ req.date }} ({{ req.start_time.substring(0, 5) }}-{{ req.end_time.substring(0, 5) }})</p>
                 <p class="text-xs text-zinc-500 mt-1">Menunggu: {{ req.owner_organization?.name }}</p>
               </div>
-              <span class="px-2.5 py-1 bg-blue-50 text-blue-700 text-xs font-medium rounded-md">Menunggu Pemilik</span>
+              <div class="flex flex-col items-end gap-1.5 shrink-0">
+                <span class="px-2.5 py-1 bg-blue-50 text-blue-700 text-xs font-medium rounded-md">Menunggu Pemilik</span>
+                <Button
+                  v-if="req.workflow_type === 'inter_eskul' && req.document?.document_status === 'waiting_mpk_signature'"
+                  size="sm"
+                  class="bg-indigo-600 text-white text-xs h-7 px-2.5"
+                  :disabled="!profileComplete || signingId === req.id"
+                  @click="emit('sign', req)"
+                >
+                  {{ signingId === req.id ? 'Menyimpan...' : 'Bubuhkan TTD MPK' }}
+                </Button>
+              </div>
             </div>
           </Card>
           <p v-if="awaitingOwner.length === 0" class="text-xs text-zinc-500">Tidak ada.</p>
@@ -161,18 +236,32 @@ function scrollToProfile() {
           <Card v-for="req in completed" :key="req.id" class="border-zinc-200 p-4">
             <div class="flex justify-between items-start gap-2">
               <div>
-                <p class="font-semibold text-sm text-zinc-900">{{ req.organization?.name }} · {{ req.facility?.name }}</p>
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <p class="font-semibold text-sm text-zinc-900">{{ req.organization?.name }} · {{ req.facility?.name }}</p>
+                  <span v-if="req.letter_number" class="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700">
+                    {{ req.letter_number }}
+                  </span>
+                </div>
                 <p class="text-xs text-zinc-600">{{ req.date }} ({{ req.start_time.substring(0, 5) }}-{{ req.end_time.substring(0, 5) }})</p>
                 <p v-if="req.rejection_reason" class="text-xs text-red-600 mt-1">Alasan: "{{ req.rejection_reason }}"</p>
+                <p v-if="req.document?.document_status === 'pdf_generation_failed' && req.document?.pdf_generation_error" class="text-xs text-amber-800 mt-1">
+                  Error PDF: {{ req.document.pdf_generation_error }}
+                </p>
               </div>
-              <span
-                :class="[
-                  'px-2.5 py-1 text-xs font-medium rounded-md',
-                  req.status === 'approved' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700',
-                ]"
-              >
-                {{ req.status === 'approved' ? 'Disetujui' : 'Ditolak' }}
-              </span>
+              <div class="flex flex-col items-end gap-1.5 shrink-0">
+                <span :class="['px-2.5 py-1 text-xs font-medium rounded-md', completedPdfStatusBadge(req).cls]">
+                  {{ completedPdfStatusBadge(req).label }}
+                </span>
+                <Button
+                  v-if="req.status === 'approved' && ['pending_pdf_generation', 'pdf_generation_failed'].includes(req.document?.document_status)"
+                  size="sm"
+                  class="bg-amber-600 text-white text-xs h-7 px-2.5"
+                  :disabled="regeneratingId === req.id"
+                  @click="emit('regenerate-pdf', req)"
+                >
+                  {{ regeneratingId === req.id ? 'Memproses...' : 'Generate PDF' }}
+                </Button>
+              </div>
             </div>
           </Card>
           <p v-if="completed.length === 0" class="text-xs text-zinc-500">Belum ada riwayat.</p>

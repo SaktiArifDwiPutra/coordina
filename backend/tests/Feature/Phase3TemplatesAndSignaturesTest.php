@@ -39,6 +39,24 @@ class Phase3TemplatesAndSignaturesTest extends TestCase
 
         Storage::fake('local');
 
+        $this->app->instance(\App\Contracts\PdfConverterInterface::class, new class implements \App\Contracts\PdfConverterInterface {
+            public function isAvailable(): bool
+            {
+                return true;
+            }
+
+            public function convertDocxToPdf(string $docxFullPath, string $outputDirectory): string
+            {
+                if (! is_dir($outputDirectory)) {
+                    mkdir($outputDirectory, 0775, true);
+                }
+                $target = $outputDirectory . DIRECTORY_SEPARATOR . pathinfo($docxFullPath, PATHINFO_FILENAME) . '.pdf';
+                file_put_contents($target, "%PDF-1.4\n% Phase3 Stub PDF\n%%EOF\n");
+
+                return $target;
+            }
+        });
+
         $this->mpkOrg = Organization::create(['name' => 'MPK / OSIS', 'advisor_name' => 'Bu Siti', 'is_mpk' => true]);
         $this->basketOrg = Organization::create(['name' => 'Eskul Basket', 'advisor_name' => 'Pak Budi']);
         $this->futsalOrg = Organization::create(['name' => 'Eskul Futsal', 'advisor_name' => 'Pak Andi']);

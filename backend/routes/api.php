@@ -57,6 +57,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/borrow-requests/{id}/owner-decision', [BorrowRequestController::class, 'ownerDecision']);
     Route::post('/borrow-requests/{id}/sign', [BorrowRequestController::class, 'sign']);
     Route::post('/borrow-requests/{id}/finalize', [BorrowRequestController::class, 'finalize']);
+    Route::post('/borrow-requests/{id}/request-correction', [BorrowRequestController::class, 'requestCorrection']);
+    Route::post('/borrow-requests/{id}/revise', [BorrowRequestController::class, 'revise']);
+
+    // document archive & authorized downloads
+    Route::get('/documents/archive', [\App\Http\Controllers\BorrowDocumentController::class, 'archive']);
+    Route::get('/borrow-requests/{id}/document/pdf', [\App\Http\Controllers\BorrowDocumentController::class, 'downloadPdf']);
+    Route::get('/borrow-requests/{id}/document/docx', [\App\Http\Controllers\BorrowDocumentController::class, 'downloadDocx']);
+    Route::post('/borrow-requests/{id}/regenerate-pdf', [\App\Http\Controllers\BorrowDocumentController::class, 'regeneratePdf']);
 
     // users
     Route::get('/users', [UserController::class, 'index']);

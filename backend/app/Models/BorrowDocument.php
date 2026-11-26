@@ -12,6 +12,8 @@ class BorrowDocument extends Model
     public const STATUS_WAITING_OWNER_SIGNATURE = 'waiting_owner_signature';
     public const STATUS_PENDING_MPK_VERIFICATION = 'pending_mpk_verification';
     public const STATUS_NEEDS_CORRECTION = 'needs_correction';
+    public const STATUS_PENDING_PDF_GENERATION = 'pending_pdf_generation';
+    public const STATUS_PDF_GENERATION_FAILED = 'pdf_generation_failed';
     public const STATUS_FINALIZED = 'finalized';
     public const STATUS_REJECTED = 'rejected';
 
@@ -20,8 +22,10 @@ class BorrowDocument extends Model
         'document_template_id',
         'current_revision',
         'document_status',
+        'merged_docx_path',
         'final_pdf_path',
         'final_pdf_sha256',
+        'pdf_generation_error',
         'verified_by_user_id',
         'verified_at',
         'published_at',

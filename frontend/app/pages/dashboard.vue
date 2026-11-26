@@ -14,6 +14,7 @@ import MpkWorkbenchPanel from '~/components/dashboard/MpkWorkbenchPanel.vue'
 import MpkMasterDataPanel from '~/components/dashboard/MpkMasterDataPanel.vue'
 import OrganizationProfilePanel from '~/components/dashboard/OrganizationProfilePanel.vue'
 import TemplateManagerPanel from '~/components/dashboard/TemplateManagerPanel.vue'
+import DocumentArchivePanel from '~/components/dashboard/DocumentArchivePanel.vue'
 
 const auth = useAuthStore()
 const { apiFetch, extractErrorMessage } = useApi()
@@ -30,10 +31,17 @@ const unreadCount = ref(0)
 const orgProfile = ref(null)
 const templates = ref([])
 const requiredPlaceholders = ref([])
+const archiveItems = ref([])
 
 const loading = ref(true)
 const loadingRequests = ref(true)
+const loadingArchive = ref(false)
 const loadingUsers = ref(false)
+const downloadingDocumentId = ref(null)
+const regeneratingDocumentId = ref(null)
+const screeningId = ref(null)
+const finalizingId = ref(null)
+const signingId = ref(null)
 
 const isSubmittingRequest = ref(false)
 const isCreatingFacility = ref(false)
@@ -49,9 +57,20 @@ const passwordModal = ref({ isOpen: false, userId: null, userName: '', newPasswo
 const deleteModal = ref({ isOpen: false, userId: null, userName: '', isSubmitting: false })
 const decisionModal = ref({
   isOpen: false,
-  mode: '', // 'screen_reject' | 'owner_approve' | 'owner_reject'
+  mode: '', // 'screen_reject' | 'owner_approve' | 'owner_reject' | 'request_correction'
   request: null,
   reason: '',
+  isSubmitting: false,
+})
+const reviseModal = ref({
+  isOpen: false,
+  request: null,
+  facility_id: '',
+  date: '',
+  start_time: '',
+  end_time: '',
+  reason: '',
+  confirm_signature: true,
   isSubmitting: false,
 })
 
@@ -59,7 +78,9 @@ const isMpk = computed(() => auth.user?.role === 'admin_mpk')
 
 const incomingOwnerRequests = computed(() =>
   borrowRequests.value.filter(
-    (r) => r.owner_organization_id === auth.user?.organization_id && r.status === 'pending_owner'
+    (r) =>
+      r.owner_organization_id === auth.user?.organization_id &&
+      (r.status === 'pending_owner' || (r.status === 'owner_approved' && r.document?.document_status === 'waiting_owner_signature'))
   )
 )
 
@@ -147,8 +168,20 @@ async function fetchTemplates() {
   }
 }
 
+async function fetchArchive(silent = false) {
+  if (!silent) loadingArchive.value = true
+  try {
+    const res = await apiFetch('/api/documents/archive')
+    archiveItems.value = res.data || []
+  } catch (error) {
+    console.error(error)
+  } finally {
+    if (!silent) loadingArchive.value = false
+  }
+}
+
 async function refreshAllData(silent = true) {
-  const tasks = [fetchFacilities(silent), fetchBorrowRequests(silent), fetchNotifications(), fetchOrganizationProfile()]
+  const tasks = [fetchFacilities(silent), fetchBorrowRequests(silent), fetchArchive(silent), fetchNotifications(), fetchOrganizationProfile()]
   if (isMpk.value) {
     tasks.push(fetchEskulUsers(silent), fetchTemplates())
   }
@@ -170,11 +203,13 @@ async function handleSubmitBorrowRequest(payload, resetForm) {
 }
 
 async function handleScreenAccept(req) {
+  if (screeningId.value === req.id) return
   if (!orgProfile.value?.is_complete_for_signing) {
     showAlert('Profil Belum Lengkap', 'Lengkapi profil dan gambar tanda tangan MPK terlebih dahulu.', 'error')
     return
   }
 
+  screeningId.value = req.id
   try {
     const res = await apiFetch(`/api/borrow-requests/${req.id}/screen`, {
       method: 'POST',
@@ -184,6 +219,27 @@ async function handleScreenAccept(req) {
     await refreshAllData(true)
   } catch (error) {
     showAlert('Gagal!', extractErrorMessage(error, 'Gagal memproses screening.'), 'error')
+  } finally {
+    screeningId.value = null
+  }
+}
+
+async function handleSignDocument(req) {
+  if (signingId.value === req.id) return
+  if (!orgProfile.value?.is_complete_for_signing) {
+    showAlert('Profil Belum Lengkap', 'Lengkapi profil dan gambar tanda tangan organisasi terlebih dahulu sebelum menandatangani.', 'error')
+    return
+  }
+
+  signingId.value = req.id
+  try {
+    const res = await apiFetch(`/api/borrow-requests/${req.id}/sign`, { method: 'POST' })
+    showAlert('Berhasil!', res.message, 'success')
+    await refreshAllData(true)
+  } catch (error) {
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal membubuhkan tanda tangan.'), 'error')
+  } finally {
+    signingId.value = null
   }
 }
 
@@ -197,8 +253,8 @@ function openDecisionModal(mode, req) {
 
 async function submitDecisionModal() {
   const { mode, request, reason } = decisionModal.value
-  if ((mode === 'screen_reject' || mode === 'owner_reject') && !reason.trim()) {
-    showAlert('Alasan Wajib', 'Harap tuliskan alasan penolakan.', 'error')
+  if ((mode === 'screen_reject' || mode === 'owner_reject' || mode === 'request_correction') && !reason.trim()) {
+    showAlert('Catatan Wajib', 'Harap tuliskan alasan atau catatan revisi.', 'error')
     return
   }
 
@@ -209,6 +265,11 @@ async function submitDecisionModal() {
       res = await apiFetch(`/api/borrow-requests/${request.id}/screen`, {
         method: 'POST',
         body: { decision: 'reject', rejection_reason: reason.trim() },
+      })
+    } else if (mode === 'request_correction') {
+      res = await apiFetch(`/api/borrow-requests/${request.id}/request-correction`, {
+        method: 'POST',
+        body: { reason: reason.trim() },
       })
     } else {
       res = await apiFetch(`/api/borrow-requests/${request.id}/owner-decision`, {
@@ -227,6 +288,50 @@ async function submitDecisionModal() {
     showAlert('Gagal!', extractErrorMessage(error, 'Gagal memproses keputusan.'), 'error')
   } finally {
     decisionModal.value.isSubmitting = false
+  }
+}
+
+function openReviseModal(req) {
+  reviseModal.value = {
+    isOpen: true,
+    request: req,
+    facility_id: String(req.facility_id),
+    date: req.date,
+    start_time: String(req.start_time || '').substring(0, 5),
+    end_time: String(req.end_time || '').substring(0, 5),
+    reason: req.reason || '',
+    confirm_signature: Boolean(orgProfile.value?.is_complete_for_signing),
+    isSubmitting: false,
+  }
+}
+
+async function submitReviseModal() {
+  const modal = reviseModal.value
+  if (!modal.facility_id || !modal.date || !modal.start_time || !modal.end_time || !modal.reason.trim()) {
+    showAlert('Data Belum Lengkap', 'Lengkapi seluruh data revisi permohonan terlebih dahulu.', 'error')
+    return
+  }
+
+  modal.isSubmitting = true
+  try {
+    const res = await apiFetch(`/api/borrow-requests/${modal.request.id}/revise`, {
+      method: 'POST',
+      body: {
+        facility_id: Number(modal.facility_id),
+        date: modal.date,
+        start_time: modal.start_time,
+        end_time: modal.end_time,
+        reason: modal.reason.trim(),
+        confirm_signature: Boolean(modal.confirm_signature),
+      },
+    })
+    reviseModal.value.isOpen = false
+    showAlert('Berhasil!', res.message, 'success')
+    await refreshAllData(true)
+  } catch (error) {
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mengirim revisi permohonan.'), 'error')
+  } finally {
+    modal.isSubmitting = false
   }
 }
 
@@ -299,12 +404,76 @@ async function handleDownloadTemplate(tpl) {
 }
 
 async function handleFinalizeRequest(req) {
+  if (finalizingId.value === req.id) return
+  finalizingId.value = req.id
   try {
     const res = await apiFetch(`/api/borrow-requests/${req.id}/finalize`, { method: 'POST' })
     showAlert('Berhasil!', res.message, 'success')
     await refreshAllData(true)
   } catch (error) {
     showAlert('Gagal!', extractErrorMessage(error, 'Gagal mencatat keputusan akhir.'), 'error')
+  } finally {
+    finalizingId.value = null
+  }
+}
+
+async function handleDownloadPdf(req, inline = false) {
+  downloadingDocumentId.value = req.id
+  try {
+    const suffix = inline ? '?inline=1' : ''
+    const blob = await apiFetch(`/api/borrow-requests/${req.id}/document/pdf${suffix}`, { responseType: 'blob' })
+    const url = URL.createObjectURL(blob)
+    if (inline) {
+      const previewWin = window.open(url, '_blank', 'noopener')
+      if (!previewWin) {
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `surat-izin-${req.id}.pdf`
+        a.click()
+        showAlert('Pop-up Diblokir', 'Browser memblokir jendela pratinjau. File PDF resmi langsung diunduh ke perangkat Anda.', 'info')
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+    } else {
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `surat-izin-${req.id}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+  } catch (error) {
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mengunduh dokumen PDF resmi.'), 'error')
+  } finally {
+    downloadingDocumentId.value = null
+  }
+}
+
+async function handleDownloadDocx(req) {
+  downloadingDocumentId.value = req.id
+  try {
+    const blob = await apiFetch(`/api/borrow-requests/${req.id}/document/docx`, { responseType: 'blob' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `surat-izin-${req.id}.docx`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mengunduh dokumen DOCX resmi.'), 'error')
+  } finally {
+    downloadingDocumentId.value = null
+  }
+}
+
+async function handleRegeneratePdf(req) {
+  regeneratingDocumentId.value = req.id
+  try {
+    const res = await apiFetch(`/api/borrow-requests/${req.id}/regenerate-pdf`, { method: 'POST' })
+    showAlert('Berhasil!', res.message, 'success')
+    await refreshAllData(true)
+  } catch (error) {
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal memproses PDF resmi.'), 'error')
+  } finally {
+    regeneratingDocumentId.value = null
   }
 }
 
@@ -483,17 +652,25 @@ onUnmounted(() => {
     <div v-if="decisionModal.isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
       <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4">
         <h3 class="text-lg font-bold text-zinc-900">
-          {{ decisionModal.mode === 'owner_approve' ? 'Izinkan Peminjaman Jadwal?' : 'Tolak Permohonan' }}
+          {{
+            decisionModal.mode === 'owner_approve'
+              ? 'Izinkan Peminjaman Jadwal?'
+              : decisionModal.mode === 'request_correction'
+                ? 'Minta Revisi Dokumen'
+                : 'Tolak Permohonan'
+          }}
         </h3>
         <p class="text-zinc-600 text-sm">
           {{ decisionModal.request?.organization?.name }} · {{ decisionModal.request?.facility?.name }} ({{ decisionModal.request?.date }})
         </p>
         <div v-if="decisionModal.mode !== 'owner_approve'" class="space-y-2">
-          <Label>Alasan Penolakan (Wajib)</Label>
+          <Label>
+            {{ decisionModal.mode === 'request_correction' ? 'Catatan Revisi untuk Pemohon (Wajib)' : 'Alasan Penolakan (Wajib)' }}
+          </Label>
           <textarea
             v-model="decisionModal.reason"
             rows="3"
-            placeholder="Jelaskan alasan penolakan secara jelas..."
+            placeholder="Tuliskan alasan atau instruksi perbaikan secara jelas..."
             class="w-full rounded-md border border-zinc-200 p-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-900"
           />
         </div>
@@ -502,9 +679,67 @@ onUnmounted(() => {
           <Button
             @click="submitDecisionModal"
             :disabled="decisionModal.isSubmitting"
-            :class="decisionModal.mode === 'owner_approve' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'"
+            :class="
+              decisionModal.mode === 'owner_approve'
+                ? 'bg-green-600 text-white'
+                : decisionModal.mode === 'request_correction'
+                  ? 'bg-amber-600 text-white'
+                  : 'bg-red-600 text-white'
+            "
           >
             {{ decisionModal.isSubmitting ? 'Memproses...' : 'Konfirmasi' }}
+          </Button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="reviseModal.isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 space-y-4">
+        <h3 class="text-lg font-bold text-zinc-900">Ajukan Revisi Permohonan</h3>
+        <p class="text-xs text-zinc-500">
+          Mengirim revisi akan memperbarui versi dokumen dan mengulang siklus tanda tangan pada revisi terbaru.
+        </p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div class="sm:col-span-2 space-y-1">
+            <Label>Fasilitas</Label>
+            <select
+              v-model="reviseModal.facility_id"
+              class="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm"
+            >
+              <option v-for="f in facilities" :key="f.id" :value="String(f.id)">{{ f.name }}</option>
+            </select>
+          </div>
+          <div class="space-y-1">
+            <Label>Tanggal</Label>
+            <Input v-model="reviseModal.date" type="date" />
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div class="space-y-1">
+              <Label>Mulai</Label>
+              <Input v-model="reviseModal.start_time" type="time" />
+            </div>
+            <div class="space-y-1">
+              <Label>Selesai</Label>
+              <Input v-model="reviseModal.end_time" type="time" />
+            </div>
+          </div>
+          <div class="sm:col-span-2 space-y-1">
+            <Label>Alasan / Keperluan</Label>
+            <textarea
+              v-model="reviseModal.reason"
+              rows="3"
+              class="w-full rounded-md border border-zinc-200 p-2.5 text-sm"
+            />
+          </div>
+          <label class="sm:col-span-2 flex items-center gap-2 text-xs text-zinc-700">
+            <input v-model="reviseModal.confirm_signature" type="checkbox" class="rounded border-zinc-300" />
+            Bubuhkan ulang tanda tangan tahap 1 pada revisi baru
+          </label>
+        </div>
+        <div class="flex justify-end gap-2 pt-2">
+          <Button variant="outline" @click="reviseModal.isOpen = false">Batal</Button>
+          <Button :disabled="reviseModal.isSubmitting" class="bg-amber-600 text-white" @click="submitReviseModal">
+            {{ reviseModal.isSubmitting ? 'Mengirim...' : 'Kirim Revisi' }}
           </Button>
         </div>
       </div>
@@ -550,8 +785,10 @@ onUnmounted(() => {
         <OwnerInboxPanel
           :requests="incomingOwnerRequests"
           :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
+          :signing-id="signingId"
           @approve="(req) => openDecisionModal('owner_approve', req)"
           @reject="(req) => openDecisionModal('owner_reject', req)"
+          @sign="handleSignDocument"
         />
 
         <BorrowRequestForm
@@ -563,7 +800,27 @@ onUnmounted(() => {
           @submit="handleSubmitBorrowRequest"
         />
 
-        <MyRequestsPanel :requests="mySubmittedRequests" :loading="loadingRequests" />
+        <MyRequestsPanel
+          :requests="mySubmittedRequests"
+          :loading="loadingRequests"
+          :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
+          :downloading-id="downloadingDocumentId"
+          :signing-id="signingId"
+          @revise="openReviseModal"
+          @sign="handleSignDocument"
+          @download-pdf="handleDownloadPdf"
+          @download-docx="handleDownloadDocx"
+        />
+
+        <DocumentArchivePanel
+          :items="archiveItems"
+          :loading="loadingArchive"
+          :is-mpk="false"
+          :downloading-id="downloadingDocumentId"
+          @refresh="fetchArchive(false)"
+          @download-pdf="handleDownloadPdf"
+          @download-docx="handleDownloadDocx"
+        />
 
         <OrganizationProfilePanel
           :profile="orgProfile"
@@ -579,9 +836,16 @@ onUnmounted(() => {
         <MpkWorkbenchPanel
           :requests="borrowRequests"
           :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
+          :screening-id="screeningId"
+          :finalizing-id="finalizingId"
+          :signing-id="signingId"
+          :regenerating-id="regeneratingDocumentId"
           @screen-accept="handleScreenAccept"
           @screen-reject="(req) => openDecisionModal('screen_reject', req)"
+          @request-correction="(req) => openDecisionModal('request_correction', req)"
           @finalize="handleFinalizeRequest"
+          @sign="handleSignDocument"
+          @regenerate-pdf="handleRegeneratePdf"
         />
 
         <BorrowRequestForm
@@ -593,7 +857,29 @@ onUnmounted(() => {
           @submit="handleSubmitBorrowRequest"
         />
 
-        <MyRequestsPanel :requests="mySubmittedRequests" :loading="loadingRequests" />
+        <MyRequestsPanel
+          :requests="mySubmittedRequests"
+          :loading="loadingRequests"
+          :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
+          :downloading-id="downloadingDocumentId"
+          :signing-id="signingId"
+          @revise="openReviseModal"
+          @sign="handleSignDocument"
+          @download-pdf="handleDownloadPdf"
+          @download-docx="handleDownloadDocx"
+        />
+
+        <DocumentArchivePanel
+          :items="archiveItems"
+          :loading="loadingArchive"
+          :is-mpk="true"
+          :downloading-id="downloadingDocumentId"
+          :regenerating-id="regeneratingDocumentId"
+          @refresh="fetchArchive(false)"
+          @download-pdf="handleDownloadPdf"
+          @download-docx="handleDownloadDocx"
+          @regenerate-pdf="handleRegeneratePdf"
+        />
 
         <TemplateManagerPanel
           :templates="templates"

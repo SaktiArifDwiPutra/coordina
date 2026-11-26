@@ -35,12 +35,13 @@ class BorrowRequestController extends Controller
 
         $query = BorrowRequest::query()
             ->with([
-                'organization:id,name',
+                'organization:id,name,is_mpk',
                 'facility:id,name',
                 'ownerOrganization:id,name',
                 'histories.actor:id,name,role',
                 'document.activeSignatures',
                 'document.signatures',
+                'document.revisions',
                 'document.template:id,name,version',
             ])
             ->latest();
@@ -64,12 +65,13 @@ class BorrowRequestController extends Controller
     public function show(Request $request, $id)
     {
         $borrowRequest = BorrowRequest::with([
-            'organization:id,name',
+            'organization:id,name,is_mpk',
             'facility:id,name',
             'ownerOrganization:id,name',
             'histories.actor:id,name,role',
             'document.activeSignatures',
             'document.signatures',
+            'document.revisions',
             'document.template:id,name,version',
         ])->findOrFail($id);
 
@@ -152,6 +154,36 @@ class BorrowRequestController extends Controller
 
         return response()->json([
             'message' => 'Keputusan akhir berhasil dicatat oleh MPK.',
+            'data' => $updated,
+        ]);
+    }
+
+    public function requestCorrection(\App\Http\Requests\RequestCorrectionRequest $request, $id)
+    {
+        $borrowRequest = BorrowRequest::findOrFail($id);
+        $updated = $this->workflowService->requestCorrection(
+            $borrowRequest,
+            $request->user(),
+            $request->validated('reason')
+        );
+
+        return response()->json([
+            'message' => 'Permintaan revisi berhasil dikirim ke pemohon.',
+            'data' => $updated,
+        ]);
+    }
+
+    public function revise(\App\Http\Requests\ReviseBorrowRequest $request, $id)
+    {
+        $borrowRequest = BorrowRequest::findOrFail($id);
+        $updated = $this->workflowService->revise(
+            $borrowRequest,
+            $request->user(),
+            $request->validated()
+        );
+
+        return response()->json([
+            'message' => 'Revisi permohonan berhasil diajukan ulang.',
             'data' => $updated,
         ]);
     }

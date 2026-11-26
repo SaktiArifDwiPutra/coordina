@@ -46,7 +46,22 @@ class DocumentTemplateController extends Controller
             ], 422);
         }
 
-        $missing = array_values(array_diff(MasterTemplateGeneratorService::REQUIRED_PLACEHOLDERS, $variables));
+        $missing = [];
+        foreach (MasterTemplateGeneratorService::REQUIRED_PLACEHOLDERS as $placeholder) {
+            if (in_array($placeholder, $variables, true)) {
+                continue;
+            }
+            if ($placeholder === 'right_school_line' && in_array('right_chair_name', $variables, true)) {
+                continue;
+            }
+            if ($placeholder === 'right_chair_name_line' && in_array('right_chair_name', $variables, true)) {
+                continue;
+            }
+            if ($placeholder === 'right_chair_id_line' && in_array('right_chair_id', $variables, true)) {
+                continue;
+            }
+            $missing[] = $placeholder;
+        }
         if (! empty($missing)) {
             return response()->json([
                 'message' => 'Template DOCX belum memiliki placeholder wajib: ' . implode(', ', $missing),
