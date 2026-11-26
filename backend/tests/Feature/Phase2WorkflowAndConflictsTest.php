@@ -8,7 +8,9 @@ use App\Models\FixedSchedule;
 use App\Models\Organization;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class Phase2WorkflowAndConflictsTest extends TestCase
@@ -29,10 +31,41 @@ class Phase2WorkflowAndConflictsTest extends TestCase
     {
         parent::setUp();
 
-        $this->mpkOrg = Organization::create(['name' => 'MPK / OSIS', 'advisor_name' => 'Bu Siti']);
-        $this->basketOrg = Organization::create(['name' => 'Eskul Basket', 'advisor_name' => 'Pak Budi']);
-        $this->futsalOrg = Organization::create(['name' => 'Eskul Futsal', 'advisor_name' => 'Pak Andi']);
-        $this->choirOrg = Organization::create(['name' => 'Paduan Suara', 'advisor_name' => 'Bu Rina']);
+        Storage::fake('local');
+        $sigMpk = UploadedFile::fake()->image('mpk.png', 100, 50)->storeAs('organizations/mpk', 'ttd.png', 'local');
+        $sigBasket = UploadedFile::fake()->image('basket.png', 100, 50)->storeAs('organizations/basket', 'ttd.png', 'local');
+        $sigFutsal = UploadedFile::fake()->image('futsal.png', 100, 50)->storeAs('organizations/futsal', 'ttd.png', 'local');
+        $sigChoir = UploadedFile::fake()->image('choir.png', 100, 50)->storeAs('organizations/choir', 'ttd.png', 'local');
+
+        $this->mpkOrg = Organization::create([
+            'name' => 'MPK / OSIS',
+            'advisor_name' => 'Bu Siti',
+            'is_mpk' => true,
+            'chairperson_name' => 'Ketua MPK',
+            'chairperson_title' => 'Ketua Komisi 2 MPK',
+            'signature_image_path' => $sigMpk,
+        ]);
+        $this->basketOrg = Organization::create([
+            'name' => 'Eskul Basket',
+            'advisor_name' => 'Pak Budi',
+            'chairperson_name' => 'Ketua Basket',
+            'chairperson_title' => 'Ketua Eskul Basket',
+            'signature_image_path' => $sigBasket,
+        ]);
+        $this->futsalOrg = Organization::create([
+            'name' => 'Eskul Futsal',
+            'advisor_name' => 'Pak Andi',
+            'chairperson_name' => 'Ketua Futsal',
+            'chairperson_title' => 'Ketua Eskul Futsal',
+            'signature_image_path' => $sigFutsal,
+        ]);
+        $this->choirOrg = Organization::create([
+            'name' => 'Paduan Suara',
+            'advisor_name' => 'Bu Rina',
+            'chairperson_name' => 'Ketua Padus',
+            'chairperson_title' => 'Ketua Paduan Suara',
+            'signature_image_path' => $sigChoir,
+        ]);
 
         $this->adminMpk = User::create([
             'name' => 'Admin MPK',
@@ -91,6 +124,7 @@ class Phase2WorkflowAndConflictsTest extends TestCase
                 'start_time' => '15:30',
                 'end_time' => '16:30',
                 'reason' => 'Latihan persiapan turnamen',
+                'confirm_signature' => true,
             ])
             ->assertStatus(201)
             ->assertJsonPath('data.workflow_type', 'inter_eskul')
@@ -106,7 +140,7 @@ class Phase2WorkflowAndConflictsTest extends TestCase
 
         // MPK screens & accepts
         $this->actingAs($this->adminMpk, 'sanctum')
-            ->postJson("/api/borrow-requests/{$reqId}/screen", ['decision' => 'accept'])
+            ->postJson("/api/borrow-requests/{$reqId}/screen", ['decision' => 'accept', 'confirm_signature' => true])
             ->assertStatus(200)
             ->assertJsonPath('data.status', 'pending_owner');
 
@@ -117,12 +151,12 @@ class Phase2WorkflowAndConflictsTest extends TestCase
 
         // MPK cannot make owner decision
         $this->actingAs($this->adminMpk, 'sanctum')
-            ->postJson("/api/borrow-requests/{$reqId}/owner-decision", ['decision' => 'approve'])
+            ->postJson("/api/borrow-requests/{$reqId}/owner-decision", ['decision' => 'approve', 'confirm_signature' => true])
             ->assertStatus(403);
 
         // Basket owner approves
         $this->actingAs($this->basketOwner, 'sanctum')
-            ->postJson("/api/borrow-requests/{$reqId}/owner-decision", ['decision' => 'approve'])
+            ->postJson("/api/borrow-requests/{$reqId}/owner-decision", ['decision' => 'approve', 'confirm_signature' => true])
             ->assertStatus(200)
             ->assertJsonPath('data.status', 'owner_approved');
 
@@ -132,7 +166,7 @@ class Phase2WorkflowAndConflictsTest extends TestCase
             ->assertStatus(200)
             ->assertJsonPath('data.status', 'approved');
 
-        $this->assertDatabaseCount('approval_histories', 4);
+        $this->assertDatabaseCount('approval_histories', 7);
     }
 
     public function test_rejection_requires_reason_at_screening_and_owner_stages(): void
@@ -207,6 +241,7 @@ class Phase2WorkflowAndConflictsTest extends TestCase
                 'start_time' => '15:00',
                 'end_time' => '17:00',
                 'reason' => 'Upacara pembukaan lomba sekolah',
+                'confirm_signature' => true,
             ])
             ->assertStatus(201)
             ->assertJsonPath('data.workflow_type', 'mpk_borrow')
@@ -216,11 +251,11 @@ class Phase2WorkflowAndConflictsTest extends TestCase
 
         // Cannot screen a Workflow B request
         $this->actingAs($this->adminMpk, 'sanctum')
-            ->postJson("/api/borrow-requests/{$reqId}/screen", ['decision' => 'accept'])
+            ->postJson("/api/borrow-requests/{$reqId}/screen", ['decision' => 'accept', 'confirm_signature' => true])
             ->assertStatus(422);
 
         $this->actingAs($this->basketOwner, 'sanctum')
-            ->postJson("/api/borrow-requests/{$reqId}/owner-decision", ['decision' => 'approve'])
+            ->postJson("/api/borrow-requests/{$reqId}/owner-decision", ['decision' => 'approve', 'confirm_signature' => true])
             ->assertStatus(200)
             ->assertJsonPath('data.status', 'owner_approved');
 
@@ -264,6 +299,7 @@ class Phase2WorkflowAndConflictsTest extends TestCase
                 'start_time' => '15:00',
                 'end_time' => '16:30',
                 'reason' => 'Futsal',
+                'confirm_signature' => true,
             ])->json('data.id');
 
         $reqB = $this->actingAs($this->choirOwner, 'sanctum')
@@ -273,17 +309,18 @@ class Phase2WorkflowAndConflictsTest extends TestCase
                 'start_time' => '15:30',
                 'end_time' => '17:00',
                 'reason' => 'Padus',
+                'confirm_signature' => true,
             ])->json('data.id');
 
         // Approve reqA completely
-        $this->actingAs($this->adminMpk, 'sanctum')->postJson("/api/borrow-requests/{$reqA}/screen", ['decision' => 'accept']);
-        $this->actingAs($this->basketOwner, 'sanctum')->postJson("/api/borrow-requests/{$reqA}/owner-decision", ['decision' => 'approve']);
+        $this->actingAs($this->adminMpk, 'sanctum')->postJson("/api/borrow-requests/{$reqA}/screen", ['decision' => 'accept', 'confirm_signature' => true]);
+        $this->actingAs($this->basketOwner, 'sanctum')->postJson("/api/borrow-requests/{$reqA}/owner-decision", ['decision' => 'approve', 'confirm_signature' => true]);
         $this->actingAs($this->adminMpk, 'sanctum')->postJson("/api/borrow-requests/{$reqA}/finalize")->assertStatus(200);
 
         // Now finalizing or even owner-approving reqB must fail with 409 Conflict
-        $this->actingAs($this->adminMpk, 'sanctum')->postJson("/api/borrow-requests/{$reqB}/screen", ['decision' => 'accept']);
+        $this->actingAs($this->adminMpk, 'sanctum')->postJson("/api/borrow-requests/{$reqB}/screen", ['decision' => 'accept', 'confirm_signature' => true]);
         $this->actingAs($this->basketOwner, 'sanctum')
-            ->postJson("/api/borrow-requests/{$reqB}/owner-decision", ['decision' => 'approve'])
+            ->postJson("/api/borrow-requests/{$reqB}/owner-decision", ['decision' => 'approve', 'confirm_signature' => true])
             ->assertStatus(409);
 
         // New submission on already-approved slot fails immediately with 409

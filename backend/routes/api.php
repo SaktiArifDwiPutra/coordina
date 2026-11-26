@@ -8,6 +8,8 @@ use App\Http\Controllers\BorrowRequestController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\FixedScheduleController;
 use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\OrganizationProfileController;
+use App\Http\Controllers\DocumentTemplateController;
 use App\Models\Organization;
 
 // =======================
@@ -26,20 +28,34 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
 
     Route::get('/user', function (Request $request) {
-        return $request->user()->load('organization:id,name');
+        return $request->user()->load('organization:id,name,is_mpk,chairperson_name,chairperson_title');
     });
+
+    // organization profile & private branding/signature assets
+    Route::get('/organization/profile', [OrganizationProfileController::class, 'show']);
+    Route::put('/organization/profile', [OrganizationProfileController::class, 'update']);
+    Route::post('/organization/assets', [OrganizationProfileController::class, 'uploadAssets']);
+    Route::get('/organizations/{id}/logo', [OrganizationProfileController::class, 'streamLogo']);
+    Route::get('/organizations/{id}/signature', [OrganizationProfileController::class, 'streamSignature']);
+
+    // master DOCX document templates (MPK only)
+    Route::get('/document-templates', [DocumentTemplateController::class, 'index']);
+    Route::post('/document-templates', [DocumentTemplateController::class, 'store']);
+    Route::post('/document-templates/generate-default', [DocumentTemplateController::class, 'generateDefault']);
+    Route::get('/document-templates/{id}/download', [DocumentTemplateController::class, 'download']);
 
     // facilities
     Route::get('/facilities', [FacilityController::class, 'index']);
     Route::post('/facilities', [FacilityController::class, 'store']);
     Route::delete('/facilities/{id}', [FacilityController::class, 'destroy']);
 
-    // borrow requests (Phase 2 explicit workflow endpoints)
+    // borrow requests & explicit signing
     Route::get('/borrow-requests', [BorrowRequestController::class, 'index']);
     Route::get('/borrow-requests/{id}', [BorrowRequestController::class, 'show']);
     Route::post('/borrow-requests', [BorrowRequestController::class, 'store']);
     Route::post('/borrow-requests/{id}/screen', [BorrowRequestController::class, 'screen']);
     Route::post('/borrow-requests/{id}/owner-decision', [BorrowRequestController::class, 'ownerDecision']);
+    Route::post('/borrow-requests/{id}/sign', [BorrowRequestController::class, 'sign']);
     Route::post('/borrow-requests/{id}/finalize', [BorrowRequestController::class, 'finalize']);
 
     // users

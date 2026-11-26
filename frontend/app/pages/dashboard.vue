@@ -12,6 +12,8 @@ import MyRequestsPanel from '~/components/dashboard/MyRequestsPanel.vue'
 import OwnerInboxPanel from '~/components/dashboard/OwnerInboxPanel.vue'
 import MpkWorkbenchPanel from '~/components/dashboard/MpkWorkbenchPanel.vue'
 import MpkMasterDataPanel from '~/components/dashboard/MpkMasterDataPanel.vue'
+import OrganizationProfilePanel from '~/components/dashboard/OrganizationProfilePanel.vue'
+import TemplateManagerPanel from '~/components/dashboard/TemplateManagerPanel.vue'
 
 const auth = useAuthStore()
 const { apiFetch, extractErrorMessage } = useApi()
@@ -25,6 +27,9 @@ const borrowRequests = ref([])
 const eskulUsers = ref([])
 const notifications = ref([])
 const unreadCount = ref(0)
+const orgProfile = ref(null)
+const templates = ref([])
+const requiredPlaceholders = ref([])
 
 const loading = ref(true)
 const loadingRequests = ref(true)
@@ -34,6 +39,10 @@ const isSubmittingRequest = ref(false)
 const isCreatingFacility = ref(false)
 const isCreatingSchedule = ref(false)
 const isCreatingUser = ref(false)
+const isSavingProfile = ref(false)
+const isUploadingAssets = ref(false)
+const isUploadingTemplate = ref(false)
+const isGeneratingDefaultTemplate = ref(false)
 
 const alertModal = ref({ isOpen: false, title: '', message: '', type: 'info' })
 const passwordModal = ref({ isOpen: false, userId: null, userName: '', newPassword: '', isSubmitting: false })
@@ -119,10 +128,29 @@ async function fetchOrganizations() {
   }
 }
 
+async function fetchOrganizationProfile() {
+  try {
+    const res = await apiFetch('/api/organization/profile')
+    orgProfile.value = res.data
+  } catch (error) {
+    console.error(error)
+  }
+}
+
+async function fetchTemplates() {
+  try {
+    const res = await apiFetch('/api/document-templates')
+    templates.value = res.data
+    requiredPlaceholders.value = res.required_placeholders || []
+  } catch (error) {
+    console.error(error)
+  }
+}
+
 async function refreshAllData(silent = true) {
-  const tasks = [fetchFacilities(silent), fetchBorrowRequests(silent), fetchNotifications()]
+  const tasks = [fetchFacilities(silent), fetchBorrowRequests(silent), fetchNotifications(), fetchOrganizationProfile()]
   if (isMpk.value) {
-    tasks.push(fetchEskulUsers(silent))
+    tasks.push(fetchEskulUsers(silent), fetchTemplates())
   }
   await Promise.all(tasks)
 }
@@ -142,10 +170,15 @@ async function handleSubmitBorrowRequest(payload, resetForm) {
 }
 
 async function handleScreenAccept(req) {
+  if (!orgProfile.value?.is_complete_for_signing) {
+    showAlert('Profil Belum Lengkap', 'Lengkapi profil dan gambar tanda tangan MPK terlebih dahulu.', 'error')
+    return
+  }
+
   try {
     const res = await apiFetch(`/api/borrow-requests/${req.id}/screen`, {
       method: 'POST',
-      body: { decision: 'accept' },
+      body: { decision: 'accept', confirm_signature: true },
     })
     showAlert('Berhasil!', res.message, 'success')
     await refreshAllData(true)
@@ -155,6 +188,10 @@ async function handleScreenAccept(req) {
 }
 
 function openDecisionModal(mode, req) {
+  if (mode === 'owner_approve' && !orgProfile.value?.is_complete_for_signing) {
+    showAlert('Profil Belum Lengkap', 'Lengkapi profil dan gambar tanda tangan organisasi Anda terlebih dahulu.', 'error')
+    return
+  }
   decisionModal.value = { isOpen: true, mode, request: req, reason: '', isSubmitting: false }
 }
 
@@ -179,6 +216,7 @@ async function submitDecisionModal() {
         body: {
           decision: mode === 'owner_approve' ? 'approve' : 'reject',
           rejection_reason: mode === 'owner_reject' ? reason.trim() : null,
+          confirm_signature: mode === 'owner_approve',
         },
       })
     }
@@ -189,6 +227,74 @@ async function submitDecisionModal() {
     showAlert('Gagal!', extractErrorMessage(error, 'Gagal memproses keputusan.'), 'error')
   } finally {
     decisionModal.value.isSubmitting = false
+  }
+}
+
+async function handleSaveProfile(payload) {
+  isSavingProfile.value = true
+  try {
+    const res = await apiFetch('/api/organization/profile', { method: 'PUT', body: payload })
+    orgProfile.value = res.data
+    showAlert('Berhasil!', res.message, 'success')
+  } catch (error) {
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal menyimpan profil organisasi.'), 'error')
+  } finally {
+    isSavingProfile.value = false
+  }
+}
+
+async function handleUploadAssets(formData, resetFiles) {
+  isUploadingAssets.value = true
+  try {
+    const res = await apiFetch('/api/organization/assets', { method: 'POST', body: formData })
+    orgProfile.value = res.data
+    resetFiles()
+    showAlert('Berhasil!', res.message, 'success')
+  } catch (error) {
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mengunggah aset organisasi.'), 'error')
+  } finally {
+    isUploadingAssets.value = false
+  }
+}
+
+async function handleUploadTemplate(formData, resetFile) {
+  isUploadingTemplate.value = true
+  try {
+    const res = await apiFetch('/api/document-templates', { method: 'POST', body: formData })
+    resetFile()
+    showAlert('Berhasil!', res.message, 'success')
+    await fetchTemplates()
+  } catch (error) {
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mengunggah master template.'), 'error')
+  } finally {
+    isUploadingTemplate.value = false
+  }
+}
+
+async function handleGenerateDefaultTemplate() {
+  isGeneratingDefaultTemplate.value = true
+  try {
+    const res = await apiFetch('/api/document-templates/generate-default', { method: 'POST' })
+    showAlert('Berhasil!', res.message, 'success')
+    await fetchTemplates()
+  } catch (error) {
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal membuat template default.'), 'error')
+  } finally {
+    isGeneratingDefaultTemplate.value = false
+  }
+}
+
+async function handleDownloadTemplate(tpl) {
+  try {
+    const blob = await apiFetch(`/api/document-templates/${tpl.id}/download`, { responseType: 'blob' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `template-v${tpl.version}.docx`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    showAlert('Gagal!', extractErrorMessage(error, 'Gagal mengunduh template.'), 'error')
   }
 }
 
@@ -443,6 +549,7 @@ onUnmounted(() => {
       <div v-if="!isMpk" class="space-y-10">
         <OwnerInboxPanel
           :requests="incomingOwnerRequests"
+          :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
           @approve="(req) => openDecisionModal('owner_approve', req)"
           @reject="(req) => openDecisionModal('owner_reject', req)"
         />
@@ -450,18 +557,28 @@ onUnmounted(() => {
         <BorrowRequestForm
           :facilities="facilities"
           :submitting="isSubmittingRequest"
+          :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
           title="Ajukan Peminjaman Fasilitas"
           subtitle="Pengajuan akan melalui screening MPK sebelum diteruskan ke pemilik jadwal tetap."
           @submit="handleSubmitBorrowRequest"
         />
 
         <MyRequestsPanel :requests="mySubmittedRequests" :loading="loadingRequests" />
+
+        <OrganizationProfilePanel
+          :profile="orgProfile"
+          :saving="isSavingProfile"
+          :uploading="isUploadingAssets"
+          @save-profile="handleSaveProfile"
+          @upload-assets="handleUploadAssets"
+        />
       </div>
 
       <!-- MPK WORKSPACE (Screening, Final Recording, Workflow B, Master Data) -->
       <div v-else class="space-y-12">
         <MpkWorkbenchPanel
           :requests="borrowRequests"
+          :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
           @screen-accept="handleScreenAccept"
           @screen-reject="(req) => openDecisionModal('screen_reject', req)"
           @finalize="handleFinalizeRequest"
@@ -470,12 +587,31 @@ onUnmounted(() => {
         <BorrowRequestForm
           :facilities="facilities"
           :submitting="isSubmittingRequest"
+          :profile-complete="Boolean(orgProfile?.is_complete_for_signing)"
           title="Ajukan Peminjaman oleh MPK (Kebutuhan Sekolah)"
           subtitle="Permintaan langsung dikirim ke organisasi pemilik jadwal tanpa tahap screening terpisah."
           @submit="handleSubmitBorrowRequest"
         />
 
         <MyRequestsPanel :requests="mySubmittedRequests" :loading="loadingRequests" />
+
+        <TemplateManagerPanel
+          :templates="templates"
+          :required-placeholders="requiredPlaceholders"
+          :uploading="isUploadingTemplate"
+          :generating-default="isGeneratingDefaultTemplate"
+          @upload-template="handleUploadTemplate"
+          @generate-default="handleGenerateDefaultTemplate"
+          @download-template="handleDownloadTemplate"
+        />
+
+        <OrganizationProfilePanel
+          :profile="orgProfile"
+          :saving="isSavingProfile"
+          :uploading="isUploadingAssets"
+          @save-profile="handleSaveProfile"
+          @upload-assets="handleUploadAssets"
+        />
 
         <MpkMasterDataPanel
           :facilities="facilities"

@@ -4,16 +4,34 @@ import { Button } from '~/components/ui/button'
 
 defineProps({
   requests: { type: Array, default: () => [] },
+  profileComplete: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['approve', 'reject'])
+
+function scrollToProfile() {
+  document.getElementById('organization-profile')?.scrollIntoView({ behavior: 'smooth' })
+}
 </script>
 
 <template>
-  <div v-if="requests.length > 0">
-    <h2 class="text-xl font-bold text-zinc-900 mb-4 flex items-center gap-2">
+  <div v-if="requests.length > 0" class="space-y-4">
+    <h2 class="text-xl font-bold text-zinc-900 flex items-center gap-2">
       <span>🔔</span> Permohonan Izin Masuk
     </h2>
+
+    <div
+      v-if="!profileComplete"
+      class="p-3.5 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+    >
+      <span>
+        <strong>Profil tanda tangan belum lengkap.</strong> Lengkapi nama ketua, jabatan, dan gambar tanda tangan sebelum menyetujui & menandatangani izin.
+      </span>
+      <button type="button" class="font-semibold underline shrink-0 text-left" @click="scrollToProfile">
+        Lengkapi Profil Organisasi →
+      </button>
+    </div>
+
     <div class="space-y-4">
       <Card v-for="req in requests" :key="'inbox-' + req.id" class="border-amber-200 bg-amber-50 shadow-sm p-5">
         <div class="flex flex-col md:flex-row justify-between md:items-center gap-4">
@@ -37,7 +55,9 @@ const emit = defineEmits(['approve', 'reject'])
             <p class="text-sm text-zinc-700 mt-1">📝 Alasan: "{{ req.reason }}"</p>
           </div>
           <div class="flex gap-2 shrink-0">
-            <Button @click="emit('approve', req)" class="bg-green-600 hover:bg-green-700 text-white">Izinkan</Button>
+            <Button :disabled="!profileComplete" @click="emit('approve', req)" class="bg-green-600 hover:bg-green-700 text-white">
+              Izinkan & TTD
+            </Button>
             <Button @click="emit('reject', req)" variant="outline" class="text-red-600 border-red-200 hover:bg-red-50">Tolak</Button>
           </div>
         </div>
@@ -45,4 +65,3 @@ const emit = defineEmits(['approve', 'reject'])
     </div>
   </div>
 </template>
-

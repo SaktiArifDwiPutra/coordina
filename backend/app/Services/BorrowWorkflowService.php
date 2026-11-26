@@ -3,7 +3,9 @@
 namespace App\Services;
 
 use App\Models\ApprovalHistory;
+use App\Models\BorrowDocument;
 use App\Models\BorrowRequest;
+use App\Models\DocumentTemplate;
 use App\Models\User;
 use App\Notifications\BorrowRequestWorkflowNotification;
 use Illuminate\Support\Facades\DB;
@@ -12,7 +14,8 @@ use Illuminate\Support\Facades\Notification;
 class BorrowWorkflowService
 {
     public function __construct(
-        private readonly ScheduleConflictService $conflictService
+        private readonly ScheduleConflictService $conflictService,
+        private readonly SignatureService $signatureService
     ) {}
 
     public function submit(User $actor, array $data): BorrowRequest
@@ -73,14 +76,27 @@ class BorrowWorkflowService
                 'finalized_at' => $initialStatus === BorrowRequest::STATUS_APPROVED ? now() : null,
             ]);
 
-            $this->recordHistory(
-                $borrowRequest,
-                $actor,
-                'submitted',
-                null,
-                $initialStatus,
-                $data['reason']
-            );
+            $activeTemplate = DocumentTemplate::where('is_active', true)->orderByDesc('version')->first();
+            $initialDocStatus = match ($initialStatus) {
+                BorrowRequest::STATUS_PENDING_OWNER => BorrowDocument::STATUS_WAITING_OWNER_SIGNATURE,
+                BorrowRequest::STATUS_APPROVED => BorrowDocument::STATUS_FINALIZED,
+                default => BorrowDocument::STATUS_WAITING_MPK_SCREENING,
+            };
+
+            $document = BorrowDocument::create([
+                'borrow_request_id' => $borrowRequest->id,
+                'document_template_id' => $activeTemplate?->id,
+                'current_revision' => 1,
+                'document_status' => $initialDocStatus,
+            ]);
+
+            $this->recordHistory($borrowRequest, $actor, 'submitted', null, $initialStatus, $data['reason']);
+
+            if (! empty($data['confirm_signature'])) {
+                $signerRole = $actor->role === 'admin_mpk' ? 'mpk' : 'requester_eskul';
+                $this->signatureService->sign($document, $actor, $signerRole, 1);
+                $this->recordHistory($borrowRequest, $actor, "signed_{$signerRole}", $initialStatus, $initialStatus);
+            }
 
             if ($initialStatus === BorrowRequest::STATUS_PENDING_MPK_SCREENING) {
                 $this->notifyMpk(
@@ -99,18 +115,18 @@ class BorrowWorkflowService
                 );
             }
 
-            return $borrowRequest->load([
-                'organization:id,name',
-                'facility:id,name',
-                'ownerOrganization:id,name',
-                'histories.actor:id,name,role',
-            ]);
+            return $this->loadRelations($borrowRequest);
         });
     }
 
-    public function screen(BorrowRequest $borrowRequest, User $mpkUser, string $decision, ?string $rejectionReason = null): BorrowRequest
-    {
-        return DB::transaction(function () use ($borrowRequest, $mpkUser, $decision, $rejectionReason) {
+    public function screen(
+        BorrowRequest $borrowRequest,
+        User $mpkUser,
+        string $decision,
+        ?string $rejectionReason = null,
+        bool $confirmSignature = false
+    ): BorrowRequest {
+        return DB::transaction(function () use ($borrowRequest, $mpkUser, $decision, $rejectionReason, $confirmSignature) {
             $locked = BorrowRequest::whereKey($borrowRequest->id)->lockForUpdate()->firstOrFail();
 
             if ($locked->status !== BorrowRequest::STATUS_PENDING_MPK_SCREENING) {
@@ -118,6 +134,7 @@ class BorrowWorkflowService
             }
 
             $fromStatus = $locked->status;
+            $document = $this->ensureLockedDocument($locked);
 
             if ($decision === 'reject') {
                 $locked->update([
@@ -126,6 +143,7 @@ class BorrowWorkflowService
                     'mpk_screened_at' => now(),
                     'finalized_at' => now(),
                 ]);
+                $document->update(['document_status' => BorrowDocument::STATUS_REJECTED]);
 
                 $this->recordHistory($locked, $mpkUser, 'screened_rejected', $fromStatus, BorrowRequest::STATUS_REJECTED, $rejectionReason);
                 $this->notifyOrganizationOwners(
@@ -142,6 +160,14 @@ class BorrowWorkflowService
                         'status' => $toStatus,
                         'mpk_screened_at' => now(),
                     ]);
+
+                    if ($confirmSignature) {
+                        $this->signatureService->sign($document, $mpkUser, 'mpk', 2);
+                        $this->recordHistory($locked, $mpkUser, 'signed_mpk', $fromStatus, $toStatus);
+                        $document->update(['document_status' => BorrowDocument::STATUS_WAITING_OWNER_SIGNATURE]);
+                    } else {
+                        $document->update(['document_status' => BorrowDocument::STATUS_WAITING_MPK_SIGNATURE]);
+                    }
 
                     $this->recordHistory($locked, $mpkUser, 'screened_accepted', $fromStatus, $toStatus);
                     $this->notifyOrganizationOwners(
@@ -168,6 +194,12 @@ class BorrowWorkflowService
                         'finalized_at' => now(),
                     ]);
 
+                    if ($confirmSignature) {
+                        $this->signatureService->sign($document, $mpkUser, 'mpk', 2);
+                        $this->recordHistory($locked, $mpkUser, 'signed_mpk', $fromStatus, $toStatus);
+                    }
+                    $document->update(['document_status' => BorrowDocument::STATUS_FINALIZED]);
+
                     $this->recordHistory($locked, $mpkUser, 'finalized_approved', $fromStatus, $toStatus);
                     $this->notifyOrganizationOwners(
                         $locked,
@@ -179,18 +211,18 @@ class BorrowWorkflowService
                 }
             }
 
-            return $locked->fresh([
-                'organization:id,name',
-                'facility:id,name',
-                'ownerOrganization:id,name',
-                'histories.actor:id,name,role',
-            ]);
+            return $this->loadRelations($locked->fresh());
         });
     }
 
-    public function ownerDecision(BorrowRequest $borrowRequest, User $ownerUser, string $decision, ?string $rejectionReason = null): BorrowRequest
-    {
-        return DB::transaction(function () use ($borrowRequest, $ownerUser, $decision, $rejectionReason) {
+    public function ownerDecision(
+        BorrowRequest $borrowRequest,
+        User $ownerUser,
+        string $decision,
+        ?string $rejectionReason = null,
+        bool $confirmSignature = false
+    ): BorrowRequest {
+        return DB::transaction(function () use ($borrowRequest, $ownerUser, $decision, $rejectionReason, $confirmSignature) {
             $locked = BorrowRequest::whereKey($borrowRequest->id)->lockForUpdate()->firstOrFail();
 
             if ($locked->status !== BorrowRequest::STATUS_PENDING_OWNER) {
@@ -198,6 +230,7 @@ class BorrowWorkflowService
             }
 
             $fromStatus = $locked->status;
+            $document = $this->ensureLockedDocument($locked);
 
             if ($decision === 'reject') {
                 $locked->update([
@@ -205,6 +238,7 @@ class BorrowWorkflowService
                     'rejection_reason' => $rejectionReason,
                     'owner_decided_at' => now(),
                 ]);
+                $document->update(['document_status' => BorrowDocument::STATUS_REJECTED]);
 
                 $this->recordHistory($locked, $ownerUser, 'owner_rejected', $fromStatus, BorrowRequest::STATUS_OWNER_REJECTED, $rejectionReason);
                 $this->notifyMpk(
@@ -228,6 +262,15 @@ class BorrowWorkflowService
                     'owner_decided_at' => now(),
                 ]);
 
+                if ($confirmSignature) {
+                    $stageOrder = $locked->workflow_type === BorrowRequest::WORKFLOW_MPK_BORROW ? 2 : 3;
+                    $this->signatureService->sign($document, $ownerUser, 'owner_eskul', $stageOrder);
+                    $this->recordHistory($locked, $ownerUser, 'signed_owner_eskul', $fromStatus, BorrowRequest::STATUS_OWNER_APPROVED);
+                    $document->update(['document_status' => BorrowDocument::STATUS_PENDING_MPK_VERIFICATION]);
+                } else {
+                    $document->update(['document_status' => BorrowDocument::STATUS_WAITING_OWNER_SIGNATURE]);
+                }
+
                 $this->recordHistory($locked, $ownerUser, 'owner_approved', $fromStatus, BorrowRequest::STATUS_OWNER_APPROVED);
                 $this->notifyMpk(
                     $locked,
@@ -237,12 +280,98 @@ class BorrowWorkflowService
                 );
             }
 
-            return $locked->fresh([
-                'organization:id,name',
-                'facility:id,name',
-                'ownerOrganization:id,name',
-                'histories.actor:id,name,role',
-            ]);
+            return $this->loadRelations($locked->fresh());
+        });
+    }
+
+    public function signStage(BorrowRequest $borrowRequest, User $actor): BorrowRequest
+    {
+        return DB::transaction(function () use ($borrowRequest, $actor) {
+            $locked = BorrowRequest::whereKey($borrowRequest->id)->lockForUpdate()->firstOrFail();
+
+            if (in_array($locked->status, [
+                BorrowRequest::STATUS_REJECTED,
+                BorrowRequest::STATUS_OWNER_REJECTED,
+                BorrowRequest::STATUS_APPROVED,
+            ], true)) {
+                $this->conflictService->abortJson('Dokumen tidak dapat ditandatangani karena permohonan sudah ditolak atau disetujui final.', 422);
+            }
+
+            $document = $this->ensureLockedDocument($locked);
+
+            if (in_array($document->document_status, [
+                BorrowDocument::STATUS_REJECTED,
+                BorrowDocument::STATUS_FINALIZED,
+                BorrowDocument::STATUS_NEEDS_CORRECTION,
+            ], true)) {
+                $this->conflictService->abortJson('Status dokumen saat ini tidak mengizinkan penandatanganan.', 422);
+            }
+
+            if ($actor->role === 'admin_mpk') {
+                if ($locked->workflow_type === BorrowRequest::WORKFLOW_MPK_BORROW) {
+                    if ($locked->status !== BorrowRequest::STATUS_PENDING_OWNER) {
+                        $this->conflictService->abortJson('Tahap tanda tangan MPK untuk pengajuan ini tidak valid.', 422);
+                    }
+
+                    $this->signatureService->sign($document, $actor, 'mpk', 1);
+                    $this->recordHistory($locked, $actor, 'signed_mpk', $locked->status, $locked->status);
+                } elseif ($locked->workflow_type === BorrowRequest::WORKFLOW_INTER_ESKUL) {
+                    if (
+                        $locked->status !== BorrowRequest::STATUS_PENDING_OWNER ||
+                        $document->document_status !== BorrowDocument::STATUS_WAITING_MPK_SIGNATURE
+                    ) {
+                        $this->conflictService->abortJson(
+                            'Tanda tangan MPK tahap 2 hanya dapat dilakukan setelah screening diterima dan dokumen menunggu tanda tangan MPK.',
+                            422
+                        );
+                    }
+
+                    $this->signatureService->sign($document, $actor, 'mpk', 2);
+                    $document->update(['document_status' => BorrowDocument::STATUS_WAITING_OWNER_SIGNATURE]);
+                    $this->recordHistory($locked, $actor, 'signed_mpk', $locked->status, $locked->status);
+                } else {
+                    $this->conflictService->abortJson('Tahap tanda tangan tidak valid untuk jenis permohonan ini.', 422);
+                }
+            } elseif ($actor->role === 'owner_eskul') {
+                if ($actor->organization_id === null) {
+                    $this->conflictService->abortJson('Akun tidak terhubung ke organisasi mana pun.', 403);
+                }
+
+                $actorOrgId = (int) $actor->organization_id;
+
+                if ($actorOrgId === (int) $locked->organization_id && $locked->workflow_type === BorrowRequest::WORKFLOW_INTER_ESKUL) {
+                    if (
+                        $locked->status !== BorrowRequest::STATUS_PENDING_MPK_SCREENING ||
+                        $document->document_status !== BorrowDocument::STATUS_WAITING_MPK_SCREENING
+                    ) {
+                        $this->conflictService->abortJson('Tanda tangan peminjam hanya dapat dilakukan sebelum screening MPK.', 422);
+                    }
+
+                    $this->signatureService->sign($document, $actor, 'requester_eskul', 1);
+                    $this->recordHistory($locked, $actor, 'signed_requester_eskul', $locked->status, $locked->status);
+                } elseif ($locked->owner_organization_id !== null && $actorOrgId === (int) $locked->owner_organization_id) {
+                    if (
+                        $locked->status !== BorrowRequest::STATUS_OWNER_APPROVED ||
+                        $document->document_status !== BorrowDocument::STATUS_WAITING_OWNER_SIGNATURE
+                    ) {
+                        $this->conflictService->abortJson(
+                            'Tanda tangan pemilik jadwal hanya dapat dilakukan setelah pemilik menyetujui dan dokumen menunggu tanda tangan pemilik.',
+                            422
+                        );
+                    }
+
+                    $stage = $locked->workflow_type === BorrowRequest::WORKFLOW_MPK_BORROW ? 2 : 3;
+                    $this->signatureService->sign($document, $actor, 'owner_eskul', $stage);
+                    $document->update(['document_status' => BorrowDocument::STATUS_PENDING_MPK_VERIFICATION]);
+                    $this->recordHistory($locked, $actor, 'signed_owner_eskul', $locked->status, $locked->status);
+                } else {
+                    $this->conflictService->abortJson('Anda tidak memiliki hak tanda tangan untuk permohonan ini.', 403);
+                }
+            } else {
+                $this->conflictService->abortJson('Anda tidak memiliki hak tanda tangan untuk permohonan ini.', 403);
+            }
+
+            return $this->loadRelations($locked->fresh());
         });
     }
 
@@ -251,8 +380,16 @@ class BorrowWorkflowService
         return DB::transaction(function () use ($borrowRequest, $mpkUser) {
             $locked = BorrowRequest::whereKey($borrowRequest->id)->lockForUpdate()->firstOrFail();
             $fromStatus = $locked->status;
+            $document = $this->ensureLockedDocument($locked);
 
             if ($fromStatus === BorrowRequest::STATUS_OWNER_APPROVED) {
+                if (! $this->signatureService->hasAllRequiredSignatures($locked, $document)) {
+                    $this->conflictService->abortJson(
+                        'Permohonan tidak dapat difinalisasi karena seluruh tanda tangan wajib pada revisi aktif belum lengkap.',
+                        422
+                    );
+                }
+
                 $this->conflictService->ensureNoApprovedBookingConflict(
                     (int) $locked->facility_id,
                     $locked->date,
@@ -265,6 +402,12 @@ class BorrowWorkflowService
                 $locked->update([
                     'status' => BorrowRequest::STATUS_APPROVED,
                     'finalized_at' => now(),
+                ]);
+                $document->update([
+                    'document_status' => BorrowDocument::STATUS_FINALIZED,
+                    'verified_by_user_id' => $mpkUser->id,
+                    'verified_at' => now(),
+                    'published_at' => now(),
                 ]);
 
                 $this->recordHistory($locked, $mpkUser, 'finalized_approved', $fromStatus, BorrowRequest::STATUS_APPROVED);
@@ -280,6 +423,7 @@ class BorrowWorkflowService
                     'status' => BorrowRequest::STATUS_REJECTED,
                     'finalized_at' => now(),
                 ]);
+                $document->update(['document_status' => BorrowDocument::STATUS_REJECTED]);
 
                 $this->recordHistory(
                     $locked,
@@ -300,13 +444,37 @@ class BorrowWorkflowService
                 $this->conflictService->abortJson('Permohonan belum siap dicatat akhir oleh MPK.', 422);
             }
 
-            return $locked->fresh([
-                'organization:id,name',
-                'facility:id,name',
-                'ownerOrganization:id,name',
-                'histories.actor:id,name,role',
-            ]);
+            return $this->loadRelations($locked->fresh());
         });
+    }
+
+    private function ensureLockedDocument(BorrowRequest $borrowRequest): BorrowDocument
+    {
+        $doc = BorrowDocument::where('borrow_request_id', $borrowRequest->id)->lockForUpdate()->first();
+
+        if ($doc) {
+            return $doc;
+        }
+
+        return BorrowDocument::create([
+            'borrow_request_id' => $borrowRequest->id,
+            'document_template_id' => DocumentTemplate::where('is_active', true)->orderByDesc('version')->value('id'),
+            'current_revision' => 1,
+            'document_status' => BorrowDocument::STATUS_DRAFT,
+        ]);
+    }
+
+    private function loadRelations(BorrowRequest $borrowRequest): BorrowRequest
+    {
+        return $borrowRequest->load([
+            'organization:id,name',
+            'facility:id,name',
+            'ownerOrganization:id,name',
+            'histories.actor:id,name,role',
+            'document.activeSignatures',
+            'document.signatures',
+            'document.template:id,name,version',
+        ]);
     }
 
     private function recordHistory(
@@ -348,4 +516,3 @@ class BorrowWorkflowService
         }
     }
 }
-

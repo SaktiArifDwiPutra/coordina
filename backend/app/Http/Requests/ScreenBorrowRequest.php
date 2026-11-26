@@ -16,6 +16,7 @@ class ScreenBorrowRequest extends FormRequest
         return [
             'decision' => ['required', 'in:accept,reject'],
             'rejection_reason' => ['required_if:decision,reject', 'nullable', 'string', 'max:1000'],
+            'confirm_signature' => ['nullable', 'boolean'],
         ];
     }
 }

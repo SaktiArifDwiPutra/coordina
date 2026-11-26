@@ -39,6 +39,9 @@ class BorrowRequestController extends Controller
                 'facility:id,name',
                 'ownerOrganization:id,name',
                 'histories.actor:id,name,role',
+                'document.activeSignatures',
+                'document.signatures',
+                'document.template:id,name,version',
             ])
             ->latest();
 
@@ -65,6 +68,9 @@ class BorrowRequestController extends Controller
             'facility:id,name',
             'ownerOrganization:id,name',
             'histories.actor:id,name,role',
+            'document.activeSignatures',
+            'document.signatures',
+            'document.template:id,name,version',
         ])->findOrFail($id);
 
         if ($request->user()->cannot('view', $borrowRequest)) {
@@ -86,7 +92,8 @@ class BorrowRequestController extends Controller
             $borrowRequest,
             $request->user(),
             $request->validated('decision'),
-            $request->validated('rejection_reason')
+            $request->validated('rejection_reason'),
+            (bool) $request->validated('confirm_signature', false)
         );
 
         return response()->json([
@@ -107,11 +114,28 @@ class BorrowRequestController extends Controller
             $borrowRequest,
             $request->user(),
             $request->validated('decision'),
-            $request->validated('rejection_reason')
+            $request->validated('rejection_reason'),
+            (bool) $request->validated('confirm_signature', false)
         );
 
         return response()->json([
             'message' => 'Keputusan pemilik jadwal berhasil dikirim ke MPK.',
+            'data' => $updated,
+        ]);
+    }
+
+    public function sign(Request $request, $id)
+    {
+        $borrowRequest = BorrowRequest::findOrFail($id);
+
+        if ($request->user()->cannot('view', $borrowRequest)) {
+            return response()->json(['message' => 'Akses ditolak.'], 403);
+        }
+
+        $updated = $this->workflowService->signStage($borrowRequest, $request->user());
+
+        return response()->json([
+            'message' => 'Tanda tangan berhasil dibubuhkan ke dokumen.',
             'data' => $updated,
         ]);
     }

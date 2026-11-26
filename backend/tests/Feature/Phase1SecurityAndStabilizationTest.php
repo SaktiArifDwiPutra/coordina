@@ -8,8 +8,10 @@ use App\Models\FixedSchedule;
 use App\Models\Organization;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class Phase1SecurityAndStabilizationTest extends TestCase
@@ -28,9 +30,33 @@ class Phase1SecurityAndStabilizationTest extends TestCase
     {
         parent::setUp();
 
-        $this->mpkOrg = Organization::create(['name' => 'MPK / OSIS', 'advisor_name' => 'Bu Siti']);
-        $this->basketOrg = Organization::create(['name' => 'Eskul Basket', 'advisor_name' => 'Pak Budi']);
-        $this->futsalOrg = Organization::create(['name' => 'Eskul Futsal', 'advisor_name' => 'Pak Andi']);
+        Storage::fake('local');
+        $sigMpk = UploadedFile::fake()->image('mpk.png', 100, 50)->storeAs('organizations/mpk', 'ttd.png', 'local');
+        $sigBasket = UploadedFile::fake()->image('basket.png', 100, 50)->storeAs('organizations/basket', 'ttd.png', 'local');
+        $sigFutsal = UploadedFile::fake()->image('futsal.png', 100, 50)->storeAs('organizations/futsal', 'ttd.png', 'local');
+
+        $this->mpkOrg = Organization::create([
+            'name' => 'MPK / OSIS',
+            'advisor_name' => 'Bu Siti',
+            'is_mpk' => true,
+            'chairperson_name' => 'Ketua MPK',
+            'chairperson_title' => 'Ketua Komisi 2 MPK',
+            'signature_image_path' => $sigMpk,
+        ]);
+        $this->basketOrg = Organization::create([
+            'name' => 'Eskul Basket',
+            'advisor_name' => 'Pak Budi',
+            'chairperson_name' => 'Ketua Basket',
+            'chairperson_title' => 'Ketua Eskul Basket',
+            'signature_image_path' => $sigBasket,
+        ]);
+        $this->futsalOrg = Organization::create([
+            'name' => 'Eskul Futsal',
+            'advisor_name' => 'Pak Andi',
+            'chairperson_name' => 'Ketua Futsal',
+            'chairperson_title' => 'Ketua Eskul Futsal',
+            'signature_image_path' => $sigFutsal,
+        ]);
 
         $this->adminMpk = User::create([
             'name' => 'Admin MPK',
@@ -209,6 +235,7 @@ class Phase1SecurityAndStabilizationTest extends TestCase
                 'start_time' => '15:30',
                 'end_time' => '16:30',
                 'reason' => 'Sparring Futsal',
+                'confirm_signature' => true,
             ])
             ->assertStatus(201);
 
@@ -239,17 +266,17 @@ class Phase1SecurityAndStabilizationTest extends TestCase
 
         // MPK forwards to owner via screening
         $this->actingAs($this->adminMpk, 'sanctum')
-            ->postJson("/api/borrow-requests/{$requestId}/screen", ['decision' => 'accept'])
+            ->postJson("/api/borrow-requests/{$requestId}/screen", ['decision' => 'accept', 'confirm_signature' => true])
             ->assertStatus(200);
 
         // Unrelated eskul (Futsal) cannot approve Basket's schedule
         $this->actingAs($this->futsalOwner, 'sanctum')
-            ->postJson("/api/borrow-requests/{$requestId}/owner-decision", ['decision' => 'approve'])
+            ->postJson("/api/borrow-requests/{$requestId}/owner-decision", ['decision' => 'approve', 'confirm_signature' => true])
             ->assertStatus(403);
 
         // Affected owner (Basket owner_eskul) approves, then MPK finalizes
         $this->actingAs($this->basketOwner, 'sanctum')
-            ->postJson("/api/borrow-requests/{$requestId}/owner-decision", ['decision' => 'approve'])
+            ->postJson("/api/borrow-requests/{$requestId}/owner-decision", ['decision' => 'approve', 'confirm_signature' => true])
             ->assertStatus(200);
 
         $this->actingAs($this->adminMpk, 'sanctum')

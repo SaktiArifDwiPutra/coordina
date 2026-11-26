@@ -5,6 +5,7 @@ import { Button } from '~/components/ui/button'
 
 const props = defineProps({
   requests: { type: Array, default: () => [] },
+  profileComplete: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['screen-accept', 'screen-reject', 'finalize'])
@@ -21,10 +22,39 @@ const awaitingOwner = computed(() =>
 const completed = computed(() =>
   props.requests.filter((r) => ['approved', 'rejected'].includes(r.status))
 )
+
+function requiredSignaturesCount(req) {
+  return req.workflow_type === 'mpk_borrow' || req.workflow_type === 'free_slot' ? 2 : 3
+}
+
+function activeSignatureCount(req) {
+  return req.document?.active_signatures?.length ?? req.document?.signatures?.filter((s) => s.is_valid).length ?? 0
+}
+
+function canFinalize(req) {
+  if (req.status === 'owner_rejected') return true
+  return activeSignatureCount(req) >= requiredSignaturesCount(req)
+}
+
+function scrollToProfile() {
+  document.getElementById('organization-profile')?.scrollIntoView({ behavior: 'smooth' })
+}
 </script>
 
 <template>
   <div class="space-y-8">
+    <div
+      v-if="!profileComplete"
+      class="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+    >
+      <span>
+        <strong>Profil tanda tangan MPK belum lengkap.</strong> Lengkapi identitas Ketua Komisi 2 dan gambar tanda tangan sebelum menerima & menandatangani screening.
+      </span>
+      <button type="button" class="font-semibold underline shrink-0 text-left" @click="scrollToProfile">
+        Lengkapi Profil MPK →
+      </button>
+    </div>
+
     <div>
       <h2 class="text-xl font-bold text-zinc-900 mb-4">Meja Kerja MPK — Antrean Screening</h2>
       <div v-if="screeningQueue.length === 0" class="text-sm text-zinc-500 bg-white border border-zinc-200 rounded-xl p-5">
@@ -57,8 +87,12 @@ const completed = computed(() =>
               </div>
             </div>
             <div class="flex flex-wrap gap-2 shrink-0">
-              <Button @click="emit('screen-accept', req)" :class="req.owner_organization_id ? 'bg-blue-600 text-white' : 'bg-green-600 text-white'">
-                {{ req.owner_organization_id ? 'Lolos Screening & Teruskan ke Pemilik' : 'Setujui Slot Kosong' }}
+              <Button
+                :disabled="!profileComplete"
+                @click="emit('screen-accept', req)"
+                :class="req.owner_organization_id ? 'bg-blue-600 text-white' : 'bg-green-600 text-white'"
+              >
+                {{ req.owner_organization_id ? 'Lolos Screening, TTD & Teruskan' : 'Setujui & TTD Slot Kosong' }}
               </Button>
               <Button @click="emit('screen-reject', req)" variant="outline" class="text-red-600 border-red-200">
                 Tolak Screening
@@ -86,13 +120,16 @@ const completed = computed(() =>
                 <strong>{{ req.owner_organization?.name }}</strong>
               </p>
               <p v-if="req.status === 'owner_approved'" class="text-xs font-semibold text-green-700 mt-2">
-                ✅ Pemilik jadwal menyetujui peminjaman ini.
+                ✅ Pemilik jadwal menyetujui peminjaman ini. (TTD: {{ activeSignatureCount(req) }}/{{ requiredSignaturesCount(req) }})
               </p>
               <p v-else class="text-xs font-semibold text-red-700 mt-2">
                 ❌ Pemilik jadwal menolak: "{{ req.rejection_reason }}"
               </p>
+              <p v-if="req.status === 'owner_approved' && !canFinalize(req)" class="text-xs text-red-600 mt-1">
+                Tanda tangan wajib belum lengkap — dokumen tidak dapat difinalisasi.
+              </p>
             </div>
-            <Button @click="emit('finalize', req)" class="bg-zinc-900 text-white shrink-0">
+            <Button :disabled="!canFinalize(req)" @click="emit('finalize', req)" class="bg-zinc-900 text-white shrink-0">
               {{ req.status === 'owner_approved' ? 'Catat Persetujuan & Perbarui Jadwal' : 'Catat & Sampaikan Penolakan' }}
             </Button>
           </div>
@@ -144,4 +181,3 @@ const completed = computed(() =>
     </div>
   </div>
 </template>
-

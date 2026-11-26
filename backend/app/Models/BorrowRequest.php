@@ -26,6 +26,8 @@ class BorrowRequest extends Model
         'facility_id',
         'owner_organization_id',
         'workflow_type',
+        'letter_number',
+        'letter_date',
         'date',
         'start_time',
         'end_time',
@@ -70,5 +72,10 @@ class BorrowRequest extends Model
     public function histories()
     {
         return $this->hasMany(ApprovalHistory::class)->orderBy('created_at')->orderBy('id');
+    }
+
+    public function document()
+    {
+        return $this->hasOne(BorrowDocument::class);
     }
 }

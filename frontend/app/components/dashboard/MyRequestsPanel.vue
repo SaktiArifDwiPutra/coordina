@@ -62,6 +62,10 @@ function workflowLabel(type) {
             <span :class="['px-3 py-1 text-xs font-semibold rounded-lg', statusBadge(req.status).cls]">
               {{ statusBadge(req.status).label }}
             </span>
+            <span v-if="req.document" class="text-[11px] text-zinc-500">
+              TTD: {{ req.document.active_signatures?.length ?? req.document.signatures?.filter((s) => s.is_valid).length ?? 0 }}/{{ req.workflow_type === 'mpk_borrow' ? 2 : 3 }}
+              · {{ req.document.document_status }}
+            </span>
             <button
               v-if="req.histories?.length"
               class="text-xs text-indigo-600 hover:underline"
