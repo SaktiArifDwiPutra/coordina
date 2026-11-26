@@ -2,47 +2,22 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\OwnerDecisionRequest;
+use App\Http\Requests\ScreenBorrowRequest;
 use App\Http\Requests\StoreBorrowRequest;
-use App\Http\Requests\UpdateBorrowRequestStatusRequest;
 use App\Models\BorrowRequest;
-use App\Models\FixedSchedule;
-use Carbon\Carbon;
+use App\Services\BorrowWorkflowService;
 use Illuminate\Http\Request;
 
 class BorrowRequestController extends Controller
 {
+    public function __construct(
+        private readonly BorrowWorkflowService $workflowService
+    ) {}
+
     public function store(StoreBorrowRequest $request)
     {
-        $user = $request->user();
-
-        if ($user->organization_id === null) {
-            return response()->json([
-                'message' => 'Akun Anda belum terhubung ke organisasi mana pun.',
-            ], 422);
-        }
-
-        $validated = $request->validated();
-        $dayName = Carbon::parse($validated['date'])->format('l');
-
-        $fixedSchedule = FixedSchedule::where('facility_id', $validated['facility_id'])
-            ->where('day', $dayName)
-            ->where(function ($q) use ($validated) {
-                $q->where('start_time', '<', $validated['end_time'])
-                    ->where('end_time', '>', $validated['start_time']);
-            })
-            ->first();
-
-        $borrowRequest = BorrowRequest::create([
-            'user_id' => $user->id,
-            'organization_id' => $user->organization_id,
-            'facility_id' => $validated['facility_id'],
-            'owner_organization_id' => $fixedSchedule?->organization_id,
-            'date' => $validated['date'],
-            'start_time' => $validated['start_time'],
-            'end_time' => $validated['end_time'],
-            'reason' => $validated['reason'],
-            'status' => 'pending_mpk',
-        ]);
+        $borrowRequest = $this->workflowService->submit($request->user(), $request->validated());
 
         return response()->json([
             'message' => 'Pengajuan berhasil dikirim.',
@@ -63,6 +38,7 @@ class BorrowRequestController extends Controller
                 'organization:id,name',
                 'facility:id,name',
                 'ownerOrganization:id,name',
+                'histories.actor:id,name,role',
             ])
             ->latest();
 
@@ -82,67 +58,77 @@ class BorrowRequestController extends Controller
         return response()->json(['data' => $requests]);
     }
 
-    public function updateStatus(UpdateBorrowRequestStatusRequest $request, $id)
+    public function show(Request $request, $id)
     {
-        $user = $request->user();
-        $newStatus = $request->validated('status');
+        $borrowRequest = BorrowRequest::with([
+            'organization:id,name',
+            'facility:id,name',
+            'ownerOrganization:id,name',
+            'histories.actor:id,name,role',
+        ])->findOrFail($id);
+
+        if ($request->user()->cannot('view', $borrowRequest)) {
+            return response()->json(['message' => 'Akses ditolak.'], 403);
+        }
+
+        return response()->json(['data' => $borrowRequest]);
+    }
+
+    public function screen(ScreenBorrowRequest $request, $id)
+    {
         $borrowRequest = BorrowRequest::findOrFail($id);
 
-        if ($user->role === 'admin_mpk') {
-            if ($borrowRequest->status !== 'pending_mpk') {
-                return response()->json([
-                    'message' => 'Status permohonan tidak dapat diubah dari tahap ini oleh MPK.',
-                ], 422);
-            }
-
-            if ($newStatus === 'pending_owner' && $borrowRequest->owner_organization_id === null) {
-                return response()->json([
-                    'message' => 'Permohonan ini tidak memiliki pemilik jadwal tetap untuk diteruskan.',
-                ], 422);
-            }
-
-            if ($newStatus === 'approved' && $borrowRequest->owner_organization_id !== null) {
-                return response()->json([
-                    'message' => 'Jadwal ini dimiliki organisasi lain dan harus diteruskan ke pemilik jadwal.',
-                ], 422);
-            }
-
-            if (! in_array($newStatus, ['pending_owner', 'approved', 'rejected'], true)) {
-                return response()->json(['message' => 'Transisi status tidak valid.'], 422);
-            }
-
-            $borrowRequest->update(['status' => $newStatus]);
-
-            return response()->json([
-                'message' => 'Status berhasil diubah MPK.',
-            ]);
+        if ($request->user()->cannot('screen', $borrowRequest)) {
+            return response()->json(['message' => 'Akses ditolak.'], 403);
         }
 
-        if (
-            $user->role === 'owner_eskul' &&
-            $user->organization_id !== null &&
-            $borrowRequest->owner_organization_id !== null &&
-            (int) $borrowRequest->owner_organization_id === (int) $user->organization_id
-        ) {
-            if ($borrowRequest->status !== 'pending_owner') {
-                return response()->json([
-                    'message' => 'Permohonan belum diteruskan ke pemilik jadwal.',
-                ], 422);
-            }
-
-            if (! in_array($newStatus, ['approved', 'rejected'], true)) {
-                return response()->json(['message' => 'Transisi status tidak valid.'], 422);
-            }
-
-            $borrowRequest->update(['status' => $newStatus]);
-
-            return response()->json([
-                'message' => 'Respon izin berhasil diberikan.',
-            ]);
-        }
+        $updated = $this->workflowService->screen(
+            $borrowRequest,
+            $request->user(),
+            $request->validated('decision'),
+            $request->validated('rejection_reason')
+        );
 
         return response()->json([
-            'message' => 'Akses ditolak.',
-        ], 403);
+            'message' => 'Hasil screening MPK berhasil disimpan.',
+            'data' => $updated,
+        ]);
+    }
+
+    public function ownerDecision(OwnerDecisionRequest $request, $id)
+    {
+        $borrowRequest = BorrowRequest::findOrFail($id);
+
+        if ($request->user()->cannot('ownerDecision', $borrowRequest)) {
+            return response()->json(['message' => 'Akses ditolak.'], 403);
+        }
+
+        $updated = $this->workflowService->ownerDecision(
+            $borrowRequest,
+            $request->user(),
+            $request->validated('decision'),
+            $request->validated('rejection_reason')
+        );
+
+        return response()->json([
+            'message' => 'Keputusan pemilik jadwal berhasil dikirim ke MPK.',
+            'data' => $updated,
+        ]);
+    }
+
+    public function finalize(Request $request, $id)
+    {
+        $borrowRequest = BorrowRequest::findOrFail($id);
+
+        if ($request->user()->cannot('finalize', $borrowRequest)) {
+            return response()->json(['message' => 'Akses ditolak.'], 403);
+        }
+
+        $updated = $this->workflowService->finalize($borrowRequest, $request->user());
+
+        return response()->json([
+            'message' => 'Keputusan akhir berhasil dicatat oleh MPK.',
+            'data' => $updated,
+        ]);
     }
 }

@@ -19,7 +19,7 @@ class StoreBorrowRequest extends FormRequest
             'start_time' => ['required', 'regex:/^\d{2}:\d{2}(:\d{2})?$/'],
             'end_time' => ['required', 'regex:/^\d{2}:\d{2}(:\d{2})?$/', 'after:start_time'],
             'reason' => ['required', 'string', 'max:1000'],
+            'priority' => ['nullable', 'in:low,medium,high'],
         ];
     }
 }
-

@@ -224,32 +224,36 @@ class Phase1SecurityAndStabilizationTest extends TestCase
         ]);
 
         $this->actingAs($legacyInBasket, 'sanctum')
-            ->patchJson("/api/borrow-requests/{$requestId}/status", ['status' => 'approved'])
+            ->postJson("/api/borrow-requests/{$requestId}/owner-decision", ['decision' => 'approve'])
             ->assertStatus(403);
 
-        // MPK cannot inject arbitrary status string
+        // MPK cannot inject invalid screening decision
         $this->actingAs($this->adminMpk, 'sanctum')
-            ->patchJson("/api/borrow-requests/{$requestId}/status", ['status' => 'hacked_status'])
+            ->postJson("/api/borrow-requests/{$requestId}/screen", ['decision' => 'hacked_decision'])
             ->assertStatus(422);
 
-        // MPK cannot approve owned slot without forwarding to owner
+        // MPK cannot finalize owned slot before owner approval
         $this->actingAs($this->adminMpk, 'sanctum')
-            ->patchJson("/api/borrow-requests/{$requestId}/status", ['status' => 'approved'])
+            ->postJson("/api/borrow-requests/{$requestId}/finalize")
             ->assertStatus(422);
 
-        // MPK forwards to owner
+        // MPK forwards to owner via screening
         $this->actingAs($this->adminMpk, 'sanctum')
-            ->patchJson("/api/borrow-requests/{$requestId}/status", ['status' => 'pending_owner'])
+            ->postJson("/api/borrow-requests/{$requestId}/screen", ['decision' => 'accept'])
             ->assertStatus(200);
 
         // Unrelated eskul (Futsal) cannot approve Basket's schedule
         $this->actingAs($this->futsalOwner, 'sanctum')
-            ->patchJson("/api/borrow-requests/{$requestId}/status", ['status' => 'approved'])
+            ->postJson("/api/borrow-requests/{$requestId}/owner-decision", ['decision' => 'approve'])
             ->assertStatus(403);
 
-        // Affected owner (Basket owner_eskul) can approve
+        // Affected owner (Basket owner_eskul) approves, then MPK finalizes
         $this->actingAs($this->basketOwner, 'sanctum')
-            ->patchJson("/api/borrow-requests/{$requestId}/status", ['status' => 'approved'])
+            ->postJson("/api/borrow-requests/{$requestId}/owner-decision", ['decision' => 'approve'])
+            ->assertStatus(200);
+
+        $this->actingAs($this->adminMpk, 'sanctum')
+            ->postJson("/api/borrow-requests/{$requestId}/finalize")
             ->assertStatus(200);
 
         $this->assertDatabaseHas('borrow_requests', [

@@ -7,6 +7,7 @@ use App\Http\Controllers\FacilityController;
 use App\Http\Controllers\BorrowRequestController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\FixedScheduleController;
+use App\Http\Controllers\NotificationController;
 use App\Models\Organization;
 
 // =======================
@@ -33,10 +34,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/facilities', [FacilityController::class, 'store']);
     Route::delete('/facilities/{id}', [FacilityController::class, 'destroy']);
 
-    // borrow requests
-    Route::post('/borrow-requests', [BorrowRequestController::class, 'store']);
+    // borrow requests (Phase 2 explicit workflow endpoints)
     Route::get('/borrow-requests', [BorrowRequestController::class, 'index']);
-    Route::patch('/borrow-requests/{id}/status', [BorrowRequestController::class, 'updateStatus']);
+    Route::get('/borrow-requests/{id}', [BorrowRequestController::class, 'show']);
+    Route::post('/borrow-requests', [BorrowRequestController::class, 'store']);
+    Route::post('/borrow-requests/{id}/screen', [BorrowRequestController::class, 'screen']);
+    Route::post('/borrow-requests/{id}/owner-decision', [BorrowRequestController::class, 'ownerDecision']);
+    Route::post('/borrow-requests/{id}/finalize', [BorrowRequestController::class, 'finalize']);
 
     // users
     Route::get('/users', [UserController::class, 'index']);
@@ -47,6 +51,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // fixed schedules
     Route::post('/fixed-schedules', [FixedScheduleController::class, 'store']);
     Route::delete('/fixed-schedules/{id}', [FixedScheduleController::class, 'destroy']);
+
+    // notifications
+    Route::get('/notifications', [NotificationController::class, 'index']);
+    Route::patch('/notifications/{id}/read', [NotificationController::class, 'markAsRead']);
 
     // organizations
     Route::get('/organizations', function () {
