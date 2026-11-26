@@ -22,6 +22,9 @@ class User extends Authenticatable
         'class',
         'role',
         'organization_id',
+        'must_change_password',
+        'password_changed_at',
+        'is_active',
     ];
 
     protected $hidden = [
@@ -34,6 +37,37 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'must_change_password' => 'boolean',
+            'password_changed_at' => 'datetime',
+            'is_active' => 'boolean',
         ];
+    }
+
+    public function organization()
+    {
+        return $this->belongsTo(Organization::class);
+    }
+
+    /**
+     * Automatically link admin_mpk accounts to the canonical MPK organization if unlinked.
+     */
+    public function ensureMpkOrganizationLinked(): ?int
+    {
+        if ($this->role !== 'admin_mpk') {
+            return $this->organization_id;
+        }
+
+        if ($this->organization_id !== null) {
+            $currentOrg = Organization::find($this->organization_id);
+            if ($currentOrg && $currentOrg->is_mpk) {
+                return $this->organization_id;
+            }
+        }
+
+        $mpkOrg = Organization::resolveMpkOrganization();
+        $this->forceFill(['organization_id' => $mpkOrg->id])->save();
+        $this->setRelation('organization', $mpkOrg);
+
+        return $mpkOrg->id;
     }
 }

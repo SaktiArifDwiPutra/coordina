@@ -9,7 +9,11 @@ class Facility extends Model
 {
     use HasFactory;
     
-    protected $guarded = [];
+    protected $fillable = [
+        'name',
+        'type',
+        'description',
+    ];
 
     // Fasilitas punya banyak jadwal tetap
     public function fixedSchedules()

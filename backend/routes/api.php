@@ -7,22 +7,16 @@ use App\Http\Controllers\FacilityController;
 use App\Http\Controllers\BorrowRequestController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\FixedScheduleController;
+use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\OrganizationProfileController;
+use App\Http\Controllers\DocumentTemplateController;
+use App\Models\Organization;
 
 // =======================
 // PUBLIC ROUTES
 // =======================
 
-Route::post('/login', [AuthController::class, 'login']);
-
-Route::get('/test', function () {
-    return response()->json([
-        'message' => 'API OK'
-    ]);
-});
-
-Route::get('/dns-test', function () {
-    return gethostbyname('ep-rapid-bar-aq1ugwbd.c-8.us-east-1.aws.neon.tech');
-});
+Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:login');
 
 // =======================
 // PROTECTED ROUTES
@@ -32,36 +26,73 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // auth
     Route::post('/logout', [AuthController::class, 'logout']);
+    Route::post('/change-password', [AuthController::class, 'changePassword']);
 
     Route::get('/user', function (Request $request) {
-        return $request->user();
+        $user = $request->user();
+        $user->ensureMpkOrganizationLinked();
+        return $user->load('organization:id,name,is_mpk,chairperson_name,chairperson_title');
     });
+
+    Route::middleware(\App\Http\Middleware\EnsureAccountReady::class)->group(function () {
+
+    // organization profile & private branding/signature assets
+    Route::get('/organization/profile', [OrganizationProfileController::class, 'show']);
+    Route::put('/organization/profile', [OrganizationProfileController::class, 'update']);
+    Route::post('/organization/assets', [OrganizationProfileController::class, 'uploadAssets']);
+    Route::get('/organizations/{id}/logo', [OrganizationProfileController::class, 'streamLogo']);
+    Route::get('/organizations/{id}/signature', [OrganizationProfileController::class, 'streamSignature']);
+
+    // master DOCX document templates (MPK only)
+    Route::get('/document-templates', [DocumentTemplateController::class, 'index']);
+    Route::post('/document-templates', [DocumentTemplateController::class, 'store']);
+    Route::post('/document-templates/generate-default', [DocumentTemplateController::class, 'generateDefault']);
+    Route::get('/document-templates/{id}/download', [DocumentTemplateController::class, 'download']);
 
     // facilities
     Route::get('/facilities', [FacilityController::class, 'index']);
     Route::post('/facilities', [FacilityController::class, 'store']);
     Route::delete('/facilities/{id}', [FacilityController::class, 'destroy']);
 
-    // borrow requests
-    Route::post('/borrow-requests', [BorrowRequestController::class, 'store']);
+    // borrow requests & explicit signing
     Route::get('/borrow-requests', [BorrowRequestController::class, 'index']);
-    Route::patch('/borrow-requests/{id}/status', [BorrowRequestController::class, 'updateStatus']);
+    Route::get('/borrow-requests/{id}', [BorrowRequestController::class, 'show']);
+    Route::post('/borrow-requests', [BorrowRequestController::class, 'store']);
+    Route::post('/borrow-requests/{id}/screen', [BorrowRequestController::class, 'screen']);
+    Route::post('/borrow-requests/{id}/owner-decision', [BorrowRequestController::class, 'ownerDecision']);
+    Route::post('/borrow-requests/{id}/sign', [BorrowRequestController::class, 'sign']);
+    Route::post('/borrow-requests/{id}/finalize', [BorrowRequestController::class, 'finalize']);
+    Route::post('/borrow-requests/{id}/request-correction', [BorrowRequestController::class, 'requestCorrection']);
+    Route::post('/borrow-requests/{id}/revise', [BorrowRequestController::class, 'revise']);
+
+    // document archive & authorized downloads
+    Route::get('/documents/archive', [\App\Http\Controllers\BorrowDocumentController::class, 'archive']);
+    Route::get('/borrow-requests/{id}/document/pdf', [\App\Http\Controllers\BorrowDocumentController::class, 'downloadPdf']);
+    Route::get('/borrow-requests/{id}/document/docx', [\App\Http\Controllers\BorrowDocumentController::class, 'downloadDocx']);
+    Route::post('/borrow-requests/{id}/regenerate-pdf', [\App\Http\Controllers\BorrowDocumentController::class, 'regeneratePdf']);
 
     // users
     Route::get('/users', [UserController::class, 'index']);
     Route::post('/users', [UserController::class, 'store']);
     Route::patch('/users/{id}/reset-password', [UserController::class, 'resetPassword']);
+    Route::patch('/users/{id}/toggle-active', [UserController::class, 'toggleActive']);
     Route::delete('/users/{id}', [UserController::class, 'destroy']);
 
     // fixed schedules
     Route::post('/fixed-schedules', [FixedScheduleController::class, 'store']);
     Route::delete('/fixed-schedules/{id}', [FixedScheduleController::class, 'destroy']);
 
+    // notifications
+    Route::get('/notifications', [NotificationController::class, 'index']);
+    Route::patch('/notifications/{id}/read', [NotificationController::class, 'markAsRead']);
+
     // organizations
     Route::get('/organizations', function () {
         return response()->json([
-            'data' => \App\Models\Organization::all()
+            'data' => Organization::all(),
         ]);
+    });
+
     });
 
 });
